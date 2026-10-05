@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'w'; // Also increment this when you increment version.html
+const version = 'x'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -34635,12 +34635,19 @@ queueEvmPaymentMessage.warningAccount = null;
 // EVM recovery lives in myData and follows the normal account save lifecycle.
 function loadEvmPayments() {
   const records = myData.evmPayments ?? [];
-  if (!Array.isArray(records) || records.some((record) => !['outgoing', 'verification'].includes(record?.kind)
-    || !parseEvmTransferMessage(record.payment))) {
+  if (!Array.isArray(records)) {
     throw new Error('Saved EVM payment records could not be read.');
   }
+  const validRecords = records.filter((record) => ['outgoing', 'verification'].includes(record?.kind)
+    && parseEvmTransferMessage(record.payment));
+  if (validRecords.length !== records.length) {
+    // Invalid records came from pre-release testing and can be discarded.
+    myData.evmPayments = validRecords;
+    console.warn('Removed invalid saved EVM payment records:', records.length - validRecords.length);
+    saveState();
+  }
   // Async callers work on a snapshot, without changing the current record until saved.
-  return parse(stringify(records));
+  return parse(stringify(validRecords));
 }
 
 function saveEvmPayment(record) {
