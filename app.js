@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'x'; // Also increment this when you increment version.html
+const version = 'y'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -34644,7 +34644,6 @@ function loadEvmPayments() {
     // Invalid records came from pre-release testing and can be discarded.
     myData.evmPayments = validRecords;
     console.warn('Removed invalid saved EVM payment records:', records.length - validRecords.length);
-    saveState();
   }
   // Async callers work on a snapshot, without changing the current record until saved.
   return parse(stringify(validRecords));
