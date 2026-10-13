@@ -71,7 +71,7 @@
   --icon-clock: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'%3E%3C/circle%3E%3Cpolyline points='12 6 12 12 16 14'%3E%3C/polyline%3E%3C/svg%3E");
   --icon-info: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'%3E%3C/circle%3E%3Cline x1='12' y1='16' x2='12' y2='12'%3E%3C/line%3E%3Cline x1='12' y1='8' x2='12.01' y2='8'%3E%3C/line%3E%3C/svg%3E");
   --icon-bridge: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 8l-4 4 4 4'%3E%3C/path%3E%3Cpath d='M17 8l4 4-4 4'%3E%3C/path%3E%3Cpath d='M3 12h18'%3E%3C/path%3E%3C/svg%3E");
-  --icon-dao: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2l9 5-9 5-9-5 9-5z'/%3E%3Cpath d='M3 7v10l9 5 9-5V7'/%3E%3Cpath d='M12 12v10'/%3E%3C/svg%3E");
+  --icon-dao: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 12 2 2 4-4'/%3E%3Cpath d='M5 7c0-1.1.9-2 2-2h10a2 2 0 0 1 2 2v12H5V7Z'/%3E%3Cpath d='M22 19H2'/%3E%3C/svg%3E");
   --icon-download: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'%3E%3C/path%3E%3Cpolyline points='7,10 12,15 17,10'%3E%3C/polyline%3E%3Cline x1='12' y1='15' x2='12' y2='3'%3E%3C/line%3E%3C/svg%3E");
   --icon-share: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='18' cy='5' r='3'%3E%3C/circle%3E%3Ccircle cx='6' cy='12' r='3'%3E%3C/circle%3E%3Ccircle cx='18' cy='19' r='3'%3E%3C/circle%3E%3Cline x1='8.59' y1='13.51' x2='15.42' y2='17.49'%3E%3C/line%3E%3Cline x1='15.41' y1='6.51' x2='8.59' y2='10.49'%3E%3C/line%3E%3C/svg%3E");
   --icon-location: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0'%3E%3C/path%3E%3Ccircle cx='12' cy='10' r='3'%3E%3C/circle%3E%3C/svg%3E");
@@ -5153,6 +5153,56 @@ input[type='file'].form-control::file-selector-button {
   display: block;
 }
 /* Wallet Styles */
+.wallet-native-balance {
+  margin: 1rem;
+  padding: 16px 0;
+}
+
+.wallet-native-balance .asset-item {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) max-content 40px;
+  gap: 8px;
+  padding: 0;
+}
+
+.wallet-native-balance .asset-info {
+  text-align: center;
+}
+
+.wallet-native-balance .asset-logo {
+  margin-right: 0;
+}
+
+.wallet-native-balance .asset-balance {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 360px) {
+  .wallet-native-balance .asset-item {
+    grid-template-columns: 32px minmax(0, 1fr) max-content 32px;
+    gap: 4px;
+  }
+
+  .wallet-native-balance .asset-logo {
+    width: 32px;
+    height: 32px;
+  }
+
+  .wallet-native-balance .asset-name,
+  .wallet-native-balance .asset-balance {
+    font-size: var(--font-size-sm);
+  }
+
+  .wallet-native-balance .asset-symbol {
+    font-size: var(--font-size-xs);
+  }
+
+  .wallet-native-balance .refresh-button {
+    width: 32px;
+  }
+}
+
 .wallet-balance {
   padding: 2rem;
   text-align: center;
@@ -5805,7 +5855,7 @@ input[type='file'].form-control {
   align-items: center;
 }
 
-#receiveModal .form-group .address-container {
+:is(#receiveModal, #evmReceiveModal) .form-group .address-container {
   display: flex !important;
   align-items: center !important;
   gap: 8px !important;
@@ -5828,7 +5878,7 @@ input[type='file'].form-control {
 }
 
 /* Reduce bottom margin for the form-group containing the address */
-#receiveModal .form-group:has(.address-container) {
+:is(#receiveModal, #evmReceiveModal) .form-group:has(.address-container) {
   margin-bottom: 0.5rem;
 }
 
@@ -5959,7 +6009,7 @@ input[type='file'].form-control {
 }
 
 /* QR code container */
-#qrcode,
+:is(#qrcode, #evmReceiveQRCode),
 #secretQRCode {
   margin: 0.75rem auto !important;
   padding: 0.75rem;
@@ -5971,8 +6021,8 @@ input[type='file'].form-control {
   align-items: center;
 }
 
-#qrcode img,
-#qrcode canvas,
+:is(#qrcode, #evmReceiveQRCode) img,
+:is(#qrcode, #evmReceiveQRCode) canvas,
 #secretQRCode img,
 #secretQRCode canvas {
   display: block;
@@ -6011,7 +6061,8 @@ input[type='file'].form-control {
   display: none;
 }
 
-#sendToAddressError {
+#sendToAddressError,
+#evmSendRecipientStatus {
   font-family: var(--font-primary);
   font-size: var(--font-size-sm);
 }
@@ -7744,20 +7795,20 @@ mark {
 
 /* Adjust media query styles */
 @media (max-width: 400px), (max-height: 700px) {
-  #receiveModal .qr-data-preview {
+  :is(#receiveModal, #evmReceiveModal) .qr-data-preview {
     font-size: 0.8rem;
     padding: 8px 12px;
     min-height: auto;
     height: auto;
   }
 
-  #receiveModal .address-display {
+  :is(#receiveModal, #evmReceiveModal) .address-display {
     font-size: 0.75rem !important;
     padding: 5px 8px !important;
     line-height: 1.25 !important;
   }
 
-  #receiveModal .form-group .address-container {
+  :is(#receiveModal, #evmReceiveModal) .form-group .address-container {
     gap: 6px !important;
   }
 }
@@ -7999,14 +8050,14 @@ small {
   margin-top: 8px;
 }
 
-#sendAssetConfirmModal .confirmation-details {
+:is(#sendAssetConfirmModal, #evmSendConfirmModal) .confirmation-details {
   margin-bottom: 24px;
   background-color: var(--hover-background-purple);
   border-radius: 12px;
   padding: 16px;
 }
 
-#sendAssetConfirmModal label {
+:is(#sendAssetConfirmModal, #evmSendConfirmModal) label {
   display: block;
   font-size: var(--font-size-sm);
   color: var(--secondary-text-color);
@@ -8014,7 +8065,7 @@ small {
   font-weight: var(--font-weight-medium);
 }
 
-#sendAssetConfirmModal .confirm-value {
+:is(#sendAssetConfirmModal, #evmSendConfirmModal) .confirm-value {
   font-size: var(--font-size-base);
   color: var(--text-color);
   padding: 12px 16px;
@@ -8025,8 +8076,8 @@ small {
   border: 1px solid var(--border-color);
 }
 
-#sendAssetConfirmModal .btn,
-#sendAssetConfirmModal .btn.btn--secondary {
+:is(#sendAssetConfirmModal, #evmSendConfirmModal) .btn,
+:is(#sendAssetConfirmModal, #evmSendConfirmModal) .btn.btn--secondary {
   width: calc(100% - 32px);
   height: 48px;
   border-radius: 24px;
@@ -8037,30 +8088,30 @@ small {
   transition: all 0.2s ease;
 }
 
-#sendAssetConfirmModal .btn.btn--primary {
+:is(#sendAssetConfirmModal, #evmSendConfirmModal) .btn.btn--primary {
   background-color: var(--primary-color);
   color: var(--background-color);
   border: none;
 }
 
-#sendAssetConfirmModal #confirmAmount {
+:is(#confirmAmount, #evmConfirmAmount).confirm-value {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-bold);
   color: var(--text-color);
 }
 
-#sendAssetConfirmModal #confirmMemoGroup {
+:is(#confirmMemoGroup, #evmConfirmMemoGroup) {
   opacity: 0.8;
 }
 
-#sendAssetConfirmModal #confirmMemo {
+:is(#confirmMemo, #evmConfirmMemo).confirm-value {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-style: italic;
   background-color: var(--primary-tint-04);
 }
 
-#sendAssetConfirmModal .usd-equivalent {
+:is(#sendAssetConfirmModal, #evmSendConfirmModal) .usd-equivalent {
   font-size: 0.92em;
   color: var(--secondary-text-color);
   opacity: 0.7;
@@ -8069,7 +8120,7 @@ small {
   font-weight: var(--font-weight-medium);
 }
 
-#sendAssetConfirmModal .usd-equivalent {
+:is(#sendAssetConfirmModal, #evmSendConfirmModal) .usd-equivalent {
   position: absolute;
   right: 16px;           /* Align to the right edge */
   left: auto;            /* Ensure left is not set */
@@ -8084,8 +8135,7 @@ small {
   width: calc(100% - 32px); /* Ensure it doesn't overflow the input */
 }
 
-#sendAssetConfirmModal:has(#evmConfirmFeeGroup:not([hidden])) #confirmAmountUSD,
-#sendAssetConfirmModal #evmConfirmFeeUSD {
+#evmSendConfirmModal .usd-equivalent {
   position: static;
   width: auto;
   margin: 4px 16px 0;
@@ -9404,7 +9454,7 @@ small {
   background-image: var(--icon-dao);
 }
 
-/* DAO modal: keep the header fixed while the proposal list scrolls. */
+/* Keep the DAO header fixed above the shared toolbar and list scroll area. */
 #daoModal .modal-content {
   display: flex;
   flex-direction: column;
@@ -9414,14 +9464,13 @@ small {
   position: relative;
 }
 
-/* DAO modal: filter bar stays fixed while the list scrolls. */
+/* The toolbar moves with the results inside .dao-list-pane. */
 #daoModal .dao-toolbar {
   background: var(--background-color);
   display: flex;
   flex-direction: column;
-  flex: 0 0 auto;
   padding: 4px 8px;
-  z-index: 2;
+  border-bottom: 1px solid var(--border-color);
 }
 
 #daoModal .dao-list-pane {
@@ -9433,65 +9482,75 @@ small {
 }
 
 #daoModal .dao-filter-bar {
-  background: rgba(61, 61, 206, 0.14);
-  border-radius: var(--overlay-border-radius);
   box-sizing: border-box;
   display: grid;
   gap: 4px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 8px 12px;
+  padding: 4px;
   width: 100%;
 }
 
-#daoModal .dao-project-filter-row {
+#daoModal .dao-filter-row,
+#daoModal .dao-context-switch {
   display: grid;
-  gap: 4px;
-  grid-column: 1 / -1;
-  grid-template-columns: max-content repeat(3, minmax(max-content, 1fr));
-  min-width: 0;
-  overflow-x: auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 
-#daoModal .dao-filter-chip {
+#daoModal .dao-context-switch {
+  background: var(--hover-background);
+  border-radius: 10px;
+  padding: 2px;
+}
+
+#daoModal .dao-filter-label {
+  color: var(--secondary-text-color);
+  font-size: var(--font-size-xs);
+  margin-top: 2px;
+  text-align: left;
+}
+
+/* Inactive panels still size this cell, including at larger text sizes. */
+#daoModal .dao-filter-slot { display: grid; }
+#daoModal .dao-filter-slot > * { grid-area: 1 / 1; min-width: 0; }
+#daoModal .dao-context-filters { display: grid; gap: 4px; align-content: start; }
+#daoModal .dao-filter-inactive { visibility: hidden; pointer-events: none; }
+#daoModal .dao-filter-placeholder {
+  display: flex;
   align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  text-align: center;
+  color: var(--secondary-text-color);
+  font-size: var(--font-size-sm);
+}
+
+#daoModal .dao-filter-row--outcomes { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+#daoModal .dao-filter-row--projects { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+#daoModal .dao-filter-chip,
+#daoModal .dao-context-switch button {
   appearance: none;
-  background: transparent;
+  background: var(--hover-background);
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--text-color);
   cursor: pointer;
-  display: grid;
   font-family: var(--font-primary);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  gap: 4px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  justify-content: center;
-  line-height: 1.2;
-  min-height: 36px;
+  line-height: 1.35;
+  min-height: 44px;
   min-width: 0;
-  overflow: hidden;
-  padding: 6px 4px;
+  padding: 4px;
   position: relative;
-  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
-#daoModal .dao-filter-row-label {
-  align-items: center;
-  color: var(--secondary-text-color);
-  display: flex;
-  font-size: 9px;
-  font-weight: var(--font-weight-semibold);
-  min-height: 36px;
-  padding: 6px 0;
-}
-
-#daoModal .dao-filter-chip-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: clip;
-}
+#daoModal .dao-context-switch button { background: transparent; }
+#daoModal .dao-filter-chip { display: flex; align-items: center; justify-content: center; gap: 6px; }
+#daoModal .dao-filter-row--outcomes .dao-filter-chip,
+#daoModal .dao-filter-row--projects .dao-filter-chip { flex-direction: column; gap: 2px; padding-inline: 2px; }
+#daoModal .dao-filter-chip-label { min-width: 0; }
 
 #daoModal .dao-filter-chip.has-notification::after {
   background: var(--primary-color);
@@ -9504,15 +9563,18 @@ small {
   width: 7px;
 }
 
-#daoModal .dao-filter-chip:hover {
+#daoModal .dao-filter-chip:hover,
+#daoModal .dao-context-switch button:hover {
   background: var(--hover-background-dark);
 }
 
-#daoModal .dao-filter-chip.active {
+#daoModal .dao-filter-bar button[aria-pressed="true"] {
   background: var(--primary-color);
-  box-shadow: var(--elev-1, 0 1px 2px rgba(0,0,0,0.1));
   color: var(--background-color);
 }
+
+#daoModal .dao-filter-chip.active.has-notification::after { background: currentColor; }
+#daoModal .dao-filter-bar button:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
 
 #daoModal .dao-filter-chip-count {
   align-items: center;
@@ -9520,15 +9582,14 @@ small {
   border-radius: 999px;
   color: var(--secondary-text-color);
   display: inline-flex;
-  flex: 0 0 auto;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
-  font-weight: var(--font-weight-semibold);
   justify-content: center;
-  justify-self: end;
   min-height: 20px;
-  min-width: 22px;
-  padding: 2px 6px;
+  min-width: 20px;
+  padding: 0 4px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 #daoModal .dao-filter-chip.active .dao-filter-chip-count {
@@ -9536,23 +9597,7 @@ small {
   color: var(--background-color);
 }
 
-@media (max-width: 640px) {
-  #daoModal .dao-filter-chip {
-    font-size: clamp(9px, 2.8vw, 12px);
-    padding-left: 2px;
-    padding-right: 6px;
-  }
-
-  #daoModal .dao-project-filter-row .dao-filter-chip {
-    gap: 2px;
-    padding-inline: 2px;
-  }
-
-  #daoModal .dao-project-filter-row .dao-filter-chip-count {
-    min-width: 20px;
-    padding-inline: 4px;
-  }
-}
+#daoModal [hidden] { display: none !important; }
 
 #daoModal #daoProposalList {
   min-height: 0;
@@ -11139,7 +11184,7 @@ small {
    so every block that holds a sentence or a value states its own alignment.
    --------------------------------------------------------------------------- */
 
-.multichain-summary {
+.wallet-asset-summary {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -11152,24 +11197,28 @@ small {
   cursor: pointer;
 }
 
-.multichain-summary:hover {
+.wallet-asset-summary + .wallet-asset-summary {
+  margin-top: 16px;
+}
+
+.wallet-asset-summary:hover {
   background: var(--hover-background-purple);
 }
 
-.multichain-summary-label {
+.wallet-asset-summary-label {
   flex: 1;
   font-size: var(--font-size-base);
   font-weight: 500;
   color: var(--text-color);
 }
 
-.multichain-summary-value {
+.wallet-asset-summary-value {
   font-size: var(--font-size-base);
   font-weight: 600;
   color: var(--text-color);
 }
 
-.multichain-summary-chevron {
+.wallet-asset-summary-chevron {
   color: var(--muted-text-color);
 }
 
