@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'z'; // Also increment this when you increment version.html
+const version = 'a'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -551,6 +551,7 @@ function newDataRecord(myAccount) {
  * This function centralizes the clearing of user data to ensure consistency
  */
 function clearMyData() {
+  chatModal.resetPendingMessageConfirmations();
   myData = null;
   myAccount = null;
   stopEvmPaymentChecks();
@@ -1069,6 +1070,7 @@ function handleBeforeUnload(e) {
 
 // This is for installed apps where we can't stop the back button; just save the state
 function handleVisibilityChange() {
+  chatModal.resetPendingMessageConfirmations();
   if (document.visibilityState === 'hidden') {
     reactNativeApp.handleNativeAppSubscribe();
     if (reactNativeApp.isReactNativeWebView) {
@@ -2312,25 +2314,8 @@ class WalletScreen {
     return network?.name === 'Mainnet';
   }
 
-  getAssets() {
-    return (myData?.wallet?.assets || []).filter((asset) => isLibAsset(asset));
-  }
-
-  getAsset(assetId) {
-    const assets = this.getAssets();
-    return assets.find((asset) => asset.id === assetId) || assets[0] || null;
-  }
-
-  populateAssetSelect(select) {
-    const options = this.getAssets().map((asset) => {
-      const option = document.createElement('option');
-      option.value = asset.id;
-      option.textContent = asset.name === asset.symbol
-        ? asset.symbol : `${asset.name} (${asset.symbol})`;
-      return option;
-    });
-    select.replaceChildren(...options);
-    PopupSelect.sync(select);
+  getLibAsset() {
+    return (myData?.wallet?.assets || []).find((asset) => isLibAsset(asset)) || null;
   }
 
   // Update wallet view; refresh wallet
@@ -6216,10 +6201,8 @@ function parseDaoVoteSpendMultiple(value) {
 function getDaoUsdAsLibWei(usdValue) {
   const usdText = String(usdValue ?? '').trim();
   const stabilityText = String(parameters?.current?.stabilityFactorStr ?? '').trim();
-  if (!usdText || !stabilityText) return null;
   try {
-    const weiAmount = EthNum.toWei(EthNum.div(usdText, stabilityText));
-    return weiAmount >= 0n ? weiAmount : null;
+    return EthNum.usdToWei(usdText, stabilityText);
   } catch {
     return null;
   }
@@ -9304,6 +9287,7 @@ class SignInModal {
     myData = loadState(`${username}_${netid}`);
     assert(myData, `Account data missing for ${username}`);
     myAccount = myData.account;
+    chatModal.resetPendingMessageConfirmations();
     logsModal.log(`SignIn as ${username}_${netid}`)
     this.recordRecentSignInUsername(username);
 
@@ -16089,6 +16073,7 @@ function hideToast(toastId) {
 
 // Handle online/offline events
 async function handleConnectivityChange() {
+  chatModal.resetPendingMessageConfirmations();
   if (isOnline) {
     await getNetworkParams();
     if (!isOnline) return;
@@ -20583,10 +20568,13 @@ const CHAT_REACTION_SHEET_TAB_ICONS = {
 };
 
 class ChatModal {
+  static CONFIRMATION_WINDOW_MS = 30_000;
+
   constructor() {
     this.newestReceivedMessage = null;
     this.newestSentMessage = null;
     this.lastMessageCount = null;
+    this.messageConfirmationController = null;
 
     // used by updateTollValue and updateTollRequired
     this.toll = null;
@@ -20640,6 +20628,40 @@ class ChatModal {
     this.recentDeleteForAllGuardsByTxid = new Map();
 
     this.chatRenderedOldestIndex = CHAT_INITIAL_RENDER_COUNT - 1;
+  }
+
+  /** Give unresolved messages a fresh window after sign-in or interruption. */
+  resetPendingMessageConfirmations() {
+    this.messageConfirmationController?.abort();
+    this.messageConfirmationController = null;
+    for (const pendingTxInfo of myData?.pending || []) {
+      if (pendingTxInfo.type === 'message' && !pendingTxInfo.reactionPending && !pendingTxInfo.editPending) {
+        pendingTxInfo.checkedts = 0;
+      }
+    }
+  }
+
+  /**
+   * Bound a message receipt lookup by its current verification window.
+   * @param {{checkedts?: number}} pendingTxInfo
+   * @param {string} endpointPath
+   * @returns {Promise<{response: unknown, cancelled: boolean}>}
+   */
+  async checkPendingMessageReceipt(pendingTxInfo, endpointPath) {
+    pendingTxInfo.checkedts ||= getCorrectedTimestamp();
+    const controller = new AbortController();
+    this.messageConfirmationController = controller;
+    const remainingMs = Math.max(0, pendingTxInfo.checkedts + ChatModal.CONFIRMATION_WINDOW_MS - getCorrectedTimestamp());
+    const timeoutId = setTimeout(() => controller.abort(), remainingMs);
+    try {
+      const response = await queryNetwork(endpointPath, controller.signal);
+      return { response, cancelled: this.messageConfirmationController !== controller };
+    } finally {
+      clearTimeout(timeoutId);
+      if (this.messageConfirmationController === controller) {
+        this.messageConfirmationController = null;
+      }
+    }
   }
 
   /**
@@ -23560,6 +23582,49 @@ class ChatModal {
     return `https://maps.google.com/?q=${query}`;
   }
 
+  renderEvmPaymentDetailLink(value, url, label) {
+    const code = `<code>${escapeHtml(value)}</code>`;
+    if (!url) return code;
+    return `<a href="${escapeHtmlAttribute(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtmlAttribute(value)}" aria-label="View ${escapeHtmlAttribute(label)} ${escapeHtmlAttribute(value)} in block explorer">${code} <span aria-hidden="true">↗</span></a>`;
+  }
+
+  renderEvmPaymentMessage(item, messageTimeHTML) {
+    const payment = parseEvmTransferMessage(item.payment);
+    if (!payment) return '';
+    const verified = item.paymentVerified || 'unchecked';
+    const walletNetwork = evmAssets.getNetwork(payment.networkId);
+    const networkName = walletNetwork?.id === payment.networkId && walletNetwork.chainId === payment.chainId
+      ? walletNetwork.name : `EVM chain ${payment.chainId}`;
+    const transactionHash = payment.transactionHash;
+    const shortHash = `${transactionHash.slice(0, 10)}…${transactionHash.slice(-8)}`;
+    const transactionUrl = evmAssets.getPaymentExplorerUrl(payment);
+    const tokenUrl = evmAssets.getPaymentTokenExplorerUrl(payment);
+    return `
+      <div class="intents-payment-message evm-payment-message" data-verified="${escapeHtmlAttribute(verified)}" data-evm-payment="${escapeHtmlAttribute(evmPaymentId(payment))}">
+        <div class="evm-payment-label">Payment ${item.my ? 'sent' : 'received'}</div>
+        <div class="intents-payment-amount">${item.my ? '−' : '+'}${escapeHtml(evmPaymentAmount(payment))} <span class="evm-payment-unit">${escapeHtml(payment.symbol)}</span></div>
+        <div class="intents-payment-chain">${escapeHtml(networkName)}</div>
+        ${payment.note ? `<section class="evm-payment-note" aria-label="Payment note"><div class="evm-payment-label">Note</div><div class="intents-payment-note">${escapeHtml(payment.note)}</div></section>` : ''}
+        <div class="evm-payment-meta">
+          <div class="intents-payment-verified">${escapeHtml(paymentStatusLabel(verified))}</div>
+          <div class="evm-payment-footer">
+            <div class="evm-payment-transaction">Tx ${transactionUrl
+              ? `<a href="${escapeHtmlAttribute(transactionUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtmlAttribute(transactionHash)}" aria-label="View transaction ${escapeHtmlAttribute(transactionHash)} in block explorer">${escapeHtml(shortHash)} <span aria-hidden="true">↗</span></a>`
+              : `<span title="${escapeHtmlAttribute(transactionHash)}">${escapeHtml(shortHash)}</span>`}</div>
+            ${messageTimeHTML}
+          </div>
+        </div>
+        <details class="evm-payment-details">
+          <summary>Payment details</summary>
+          <dl>
+            ${payment.contractAddress ? `<div><dt>Token contract</dt><dd>${this.renderEvmPaymentDetailLink(payment.contractAddress, tokenUrl, 'token contract')}</dd></div>` : ''}
+            <div><dt>Network</dt><dd>${escapeHtml(networkName)} · Chain ID ${payment.chainId}</dd></div>
+            <div><dt>Transaction</dt><dd>${this.renderEvmPaymentDetailLink(transactionHash, transactionUrl, 'transaction')}</dd></div>
+          </dl>
+        </details>
+      </div>`;
+  }
+
   renderChatMessageHTML(item, { contact, lastReadTs }) {
     const timeString = formatTime(item.timestamp);
     // Use a consistent timestamp attribute for potential future use (e.g., message jumping)
@@ -23682,6 +23747,9 @@ class ChatModal {
       }).join('');
     }
 
+    const showEditedDot = !item.my && item.edited && item.edited_timestamp && item.edited_timestamp > lastReadTs && !isDeleted(item);
+    const messageTimeHTML = `<div class="message-time">${timeString}${item.edited ? ' <span class="message-edited-label">edited</span>' : ''}${showEditedDot ? ' <span class="edited-new-dot" title="Edited since last read"></span>' : ''}</div>`;
+
     // --- Render message text (if any) ---
     let messageTextHTML = '';
     switch (messageType) {
@@ -23748,23 +23816,9 @@ class ChatModal {
               </div>`;
         break;
       }
-      case EVM_CHAT_MESSAGE_TYPE: {
-        const payment = parseEvmTransferMessage(item.payment);
-        if (!payment) break;
-        const verified = item.paymentVerified || 'unchecked';
-        const walletNetwork = evmAssets.getNetwork(payment.networkId);
-        const networkName = walletNetwork?.id === payment.networkId && walletNetwork.chainId === payment.chainId
-          ? walletNetwork.name : `EVM chain ${payment.chainId}`;
-        messageTextHTML = `
-          <div class="intents-payment-message evm-payment-message" data-verified="${escapeHtml(verified)}" data-evm-payment="${escapeHtml(evmPaymentId(payment))}">
-            <div class="intents-payment-amount">${item.my ? '−' : '+'}${escapeHtml(evmPaymentAmount(payment))} ${escapeHtml(payment.symbol)}</div>
-            <div class="intents-payment-chain">${escapeHtml(networkName)}</div>
-            ${payment.contractAddress ? `<div class="intents-payment-chain" style="overflow-wrap:anywhere">Token: ${escapeHtml(payment.contractAddress)}</div>` : ''}
-            ${payment.note ? `<div class="intents-payment-note">${escapeHtml(payment.note)}</div>` : ''}
-            <div class="intents-payment-verified">${escapeHtml(paymentStatusLabel(verified))}</div>
-          </div>`;
+      case EVM_CHAT_MESSAGE_TYPE:
+        messageTextHTML = this.renderEvmPaymentMessage(item, messageTimeHTML);
         break;
-      }
       case INTENTS_CHAT_MESSAGE_TYPE: {
         const payment = item.payment;
         if (payment) {
@@ -23817,13 +23871,13 @@ class ChatModal {
     }
 
     const callTimeAttribute = messageType === 'call' && item.callTime ? `data-call-time="${escapeHtmlAttribute(item.callTime)}"` : '';
-    const showEditedDot = !item.my && item.edited && item.edited_timestamp && item.edited_timestamp > lastReadTs && !isDeleted(item);
+    const evmPayment = messageType === EVM_CHAT_MESSAGE_TYPE && messageTextHTML !== '';
     return `
-            <div class="message ${messageClass}" ${timestampAttribute} ${txidAttribute} ${statusAttribute} ${callTimeAttribute}>
+            <div class="message ${messageClass}${evmPayment ? ' evm-payment-bubble' : ''}" ${timestampAttribute} ${txidAttribute} ${statusAttribute} ${callTimeAttribute}>
               ${replyHTML}
               ${attachmentsHTML}
               ${messageTextHTML}
-              <div class="message-time">${timeString}${item.edited ? ' <span class="message-edited-label">edited</span>' : ''}${showEditedDot ? ' <span class="edited-new-dot" title="Edited since last read"></span>' : ''}</div>
+              ${evmPayment ? '' : messageTimeHTML}
             </div>
           `;
   }
@@ -23910,8 +23964,15 @@ class ChatModal {
       0
     );
 
+    const expandedPayments = new Set(Array.from(
+      this.messagesList.querySelectorAll('.evm-payment-details[open]'),
+      (details) => details.parentElement.dataset.evmPayment
+    ));
     // Replace the list once to avoid one DOM mutation per message.
     this.messagesList.innerHTML = range.html;
+    for (const details of this.messagesList.querySelectorAll('.evm-payment-details')) {
+      if (expandedPayments.has(details.parentElement.dataset.evmPayment)) details.open = true;
+    }
     this.syncAllRenderedReactionChips();
     // Straight after rendering, ahead of the early returns below: it used to
     // sit at the end of this method, which only the highlight path reaches,
@@ -24990,7 +25051,7 @@ class ChatModal {
 
   /**
    * Resolves image metadata from the backing message record.
-   * The attachment URL is the cache identity; filenames are export metadata only.
+   * The URL is used for fetching; caches derive a hostname-independent attachment ID.
    * @param {Object} item - message containing the attachment metadata
    * @param {HTMLElement} linkEl - rendered attachment row
    * @returns {{url: string, type: string}}
@@ -25192,6 +25253,7 @@ class ChatModal {
     if (e.target.closest('.voice-message-speed-button')) return;
     if (e.target.closest('.voice-message-seek')) return;
     if (e.target.closest('.reply-quote')) return;
+    if (e.target.closest('.evm-payment-details')) return;
 
     // Check if keyboard is open - if so, don't show context menu
     if (this.isKeyboardOpen()) {
@@ -33182,7 +33244,6 @@ class SendAssetFormModal {
     this.retryTxIdInput = document.getElementById('retryOfPaymentTxId');
     this.usernameAvailable = document.getElementById('sendToAddressError');
     this.submitButton = document.querySelector('#sendForm button[type="submit"]');
-    this.assetSelectDropdown = document.getElementById('sendAsset');
     this.balanceSymbol = document.getElementById('balanceSymbol');
     this.availableBalance = document.getElementById('availableBalance');
     this.toggleBalanceButton = document.getElementById('toggleBalance');
@@ -33208,7 +33269,6 @@ class SendAssetFormModal {
     });
 
     this.availableBalance.addEventListener('click', this.fillAmount.bind(this));
-    this.assetSelectDropdown.addEventListener('change', () => this.handleAssetChange());
     // amount input listener for normalizing
     this.amountInput.addEventListener('input', () => this.amountInput.value = normalizeUnsignedFloat(this.amountInput.value));
     // amount input listener for real-time balance validation
@@ -33256,7 +33316,6 @@ class SendAssetFormModal {
     this.balanceSymbol.textContent = 'LIB';
     this.balanceAmount.textContent = 'Loading…';
     this.transactionFee.textContent = 'Loading…';
-    walletScreen.populateAssetSelect(this.assetSelectDropdown);
 
     if (!openModal(this.modal)) return false;
     const session = this.session = { account: myAccount };
@@ -33279,15 +33338,30 @@ class SendAssetFormModal {
     return this.isCurrentSession(session);
   }
 
-  getSelectedAsset() {
-    return walletScreen.getAsset(this.assetSelectDropdown.value);
-  }
-
   isCurrentSession(session) {
     return Boolean(session && this.session === session);
   }
 
+  getAmountWei() {
+    const amountWei = SendAssetFormModal.toLibWei(this.amountInput.value.trim(), this.balanceSymbol.textContent);
+    return amountWei !== null && amountWei > 0n ? amountWei : null;
+  }
+
+  static toLibWei(amount, unit) {
+    try {
+      if (unit === 'USD') {
+        return EthNum.usdToWei(amount, parameters?.current?.stabilityFactorStr);
+      }
+      const decimal = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
+      if (unit !== 'LIB' || !decimal.test(amount)) return null;
+      return EthNum.toWei(amount);
+    } catch {
+      return null;
+    }
+  }
+
   reset() {
+    sendAssetConfirmModal.close();
     this.session = null;
     clearTimeout(this.sendAssetFormModalCheckTimeout);
     this.sendAssetFormModalCheckTimeout = null;
@@ -33299,12 +33373,6 @@ class SendAssetFormModal {
     this.modal?.classList.remove('active');
   }
 
-  async handleAssetChange() {
-    const asset = this.getSelectedAsset();
-    this.balanceSymbol.textContent = asset?.symbol || 'LIB';
-    await this.updateAvailableBalance();
-  }
-
   /**
    * Closes the send asset modal
    * @returns {Promise<void>}
@@ -33312,7 +33380,6 @@ class SendAssetFormModal {
   async close() {
     chatsScreen.updateChatList();
     this.reset();
-    PopupSelect.syncAll(this.sendForm);
     this.username = null;
   }
 
@@ -33533,10 +33600,6 @@ class SendAssetFormModal {
       return;
     }
 
-    // Get form values
-    const assetSymbol = this.assetSelectDropdown.options[this.assetSelectDropdown.selectedIndex].text;
-    const amount = this.amountInput.value;
-    const memo = this.memoInput.value;
     const confirmButton = sendAssetConfirmModal.confirmSendButton;
     const cancelButton = sendAssetConfirmModal.cancelButton;
 
@@ -33569,25 +33632,45 @@ class SendAssetFormModal {
       return;
     }
 
-    const stabilityFactor = getStabilityFactor();
-
-    // get `usdAmount` and `libAmount`
-    let usdAmount;
-    let libAmount;
-    const isLib = this.balanceSymbol.textContent === 'LIB';
-    if (!isLib) {
-      usdAmount = this.amountInput.value;
-      libAmount = amount / stabilityFactor;
-    } else {
-      usdAmount = amount * stabilityFactor;
-      libAmount = amount;
+    const asset = walletScreen.getLibAsset();
+    if (!asset) {
+      showToast('Liberdus asset is unavailable.', 3000, 'warning');
+      return;
+    }
+    const amountText = this.amountInput.value.trim();
+    const amountUnit = this.balanceSymbol.textContent;
+    const username = this.usernameInput.value.trim();
+    const memo = this.memoInput.value.trim();
+    const amountWei = this.getAmountWei();
+    if (amountWei === null) {
+      showToast('Unable to calculate the LIB amount. Check the amount and LIB/USD price.', 3000, 'warning');
+      return;
     }
 
+    const warning = document.createElement('span');
+    const assetIndex = myData.wallet.assets.indexOf(asset);
+    const hasBalance = await validateBalance(amountWei, assetIndex, warning);
+    if (!this.isCurrentSession(session) || this.foundAddressObject !== recipient
+      || this.amountInput.value.trim() !== amountText || this.balanceSymbol.textContent !== amountUnit
+      || this.usernameInput.value.trim() !== username || this.memoInput.value.trim() !== memo) return;
+    this.balanceWarning.textContent = warning.textContent;
+    this.balanceWarning.style.display = warning.style.display;
+    if (!hasBalance || !this.validateToll(amountWei)) return;
+
+    const payment = { amountWei, username, memo, retryTxId: this.retryTxIdInput.value };
+    if (!sendAssetConfirmModal.open(payment)) return;
+    const libAmount = EthNum.toStr(amountWei);
+    const usdAmount = amountUnit === 'USD' ? Number(amountText) : Number(libAmount) * getStabilityFactor();
+
     // Update confirmation modal with values
-    sendAssetConfirmModal.confirmAmountUSD.textContent = `≈ $${parseFloat(usdAmount).toFixed(6)} USD`;
-    sendAssetConfirmModal.confirmRecipient.textContent = this.usernameInput.value;
-    sendAssetConfirmModal.confirmAmount.textContent = `${libAmount}`;
-    sendAssetConfirmModal.confirmAsset.textContent = assetSymbol;
+    const usdText = Number.isFinite(usdAmount) && usdAmount > 0
+      ? usdAmount.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: usdAmount < 0.01 ? 6 : 2 })
+      : '';
+    sendAssetConfirmModal.confirmAmountUSD.textContent = usdText ? `≈ ${usdText} USD` : '';
+    sendAssetConfirmModal.confirmRecipient.textContent = username;
+    sendAssetConfirmModal.confirmAmount.textContent = `${libAmount} LIB`;
+    sendAssetConfirmModal.confirmAsset.textContent = asset.name === asset.symbol
+      ? asset.symbol : `${asset.name} (${asset.symbol})`;
 
     // Show/hide memo if present
     const memoGroup = sendAssetConfirmModal.confirmMemoGroup;
@@ -33600,7 +33683,6 @@ class SendAssetFormModal {
 
     confirmButton.disabled = false;
     cancelButton.disabled = false;
-    sendAssetConfirmModal.open();
   }
 
   /**
@@ -33609,7 +33691,7 @@ class SendAssetFormModal {
    */
   async fillAmount() {
     const session = this.session;
-    const asset = this.getSelectedAsset();
+    const asset = walletScreen.getLibAsset();
     if (!asset) return;
 
     await getNetworkParams();
@@ -33637,7 +33719,7 @@ class SendAssetFormModal {
    * @returns {void}
    */
   async updateAvailableBalance() {
-    const selectedAsset = this.getSelectedAsset();
+    const selectedAsset = walletScreen.getLibAsset();
     if (!selectedAsset) {
       this.updateBalanceDisplay(null);
       await this.refreshSendButtonDisabledState();
@@ -33656,8 +33738,8 @@ class SendAssetFormModal {
   async updateBalanceDisplay(asset) {
     const session = this.session;
     if (!asset) {
-      this.balanceAmount.textContent = '0.0000';
-      this.transactionFee.textContent = '0.00';
+      this.balanceAmount.textContent = 'Unavailable';
+      this.transactionFee.textContent = 'Unavailable';
       return;
     }
 
@@ -33686,7 +33768,7 @@ class SendAssetFormModal {
    * @returns {void}
    */
   updateSendAddresses() {
-    if (!this.getSelectedAsset()) {
+    if (!walletScreen.getLibAsset()) {
       showToast('No addresses available', 0, 'error');
       return;
     }
@@ -33714,6 +33796,7 @@ class SendAssetFormModal {
       this.usernameAvailable.style.display === 'inline' && this.usernameAvailable.textContent === 'found';
 
     const amount = this.amountInput.value.trim();
+    const unit = this.balanceSymbol.textContent;
 
     if (amount == '' || parseFloat(amount) == 0) {
       this.balanceWarning.textContent = '';
@@ -33722,31 +33805,33 @@ class SendAssetFormModal {
       return;
     }
 
-    const selectedAsset = this.getSelectedAsset();
+    if (unit === 'USD') {
+      await getNetworkParams();
+      if (!this.isCurrentSession(session) || this.amountInput.value.trim() !== amount
+        || this.balanceSymbol.textContent !== unit) return;
+    }
+
+    const selectedAsset = walletScreen.getLibAsset();
     const assetIndex = myData.wallet.assets.indexOf(selectedAsset);
     if (assetIndex < 0) {
       this.submitButton.disabled = true;
       return;
     }
 
-    // Check if amount is in USD and convert to LIB for validation
-    const isUSD = this.balanceSymbol.textContent === 'USD';
-    let amountForValidation = amount;
-    if (isUSD && amount) {
-      await getNetworkParams();
-      if (!this.isCurrentSession(session) || this.amountInput.value.trim() !== amount) return;
-      const stabilityFactor = getStabilityFactor();
-      amountForValidation = parseFloat(amount) / stabilityFactor;
+    const amountBigInt = this.getAmountWei();
+    if (amountBigInt === null) {
+      this.balanceWarning.textContent = 'Unable to calculate the LIB amount.';
+      this.balanceWarning.style.display = 'inline';
+      this.submitButton.disabled = true;
+      return;
     }
-
-    // convert amount to bigint
-    const amountBigInt = bigxnum2big(wei, amountForValidation.toString());
 
     // returns false if the amount/balance is invalid.
     // Validate into a detached element so an old request cannot change a newer form.
     const warning = document.createElement('span');
     const isAmountAndBalanceValid = await validateBalance(amountBigInt, assetIndex, warning);
-    if (!this.isCurrentSession(session) || this.foundAddressObject !== recipient || this.amountInput.value.trim() !== amount) return;
+    if (!this.isCurrentSession(session) || this.foundAddressObject !== recipient
+      || this.amountInput.value.trim() !== amount || this.balanceSymbol.textContent !== unit) return;
     this.balanceWarning.textContent = warning.textContent;
     this.balanceWarning.style.display = warning.style.display;
 
@@ -33768,9 +33853,16 @@ class SendAssetFormModal {
     // check if user is required to pay a toll
     if (this.tollInfo.required == 1) {
       if (this.memoInput.value.trim() != '') {
-        let amountInLIB = amount;
-        const tollInLIB = getEffectiveTollLibWei(normalizeTollToLibWei(this.tollInfo.toll, this.tollInfo.tollUnit));
-        if (tollInLIB > amountInLIB) {
+        const toll = typeof this.tollInfo.toll === 'bigint' ? this.tollInfo.toll : 0n;
+        if (toll === 0n) return true;
+        const tollWei = SendAssetFormModal.toLibWei(EthNum.toStr(toll), this.tollInfo.tollUnit || 'LIB');
+        if (tollWei === null) {
+          this.balanceWarning.textContent = 'Unable to calculate the memo toll.';
+          this.balanceWarning.style.display = 'inline';
+          return false;
+        }
+        const tollInLIB = getEffectiveTollLibWei(tollWei);
+        if (tollInLIB > amount) {
           this.balanceWarning.textContent = 'less than toll for memo';
           this.balanceWarning.style.display = 'inline';
           return false;
@@ -33805,7 +33897,7 @@ class SendAssetFormModal {
     const stabilityFactor = getStabilityFactor();
 
     // Get the raw values in LIB format
-    const asset = this.getSelectedAsset();
+    const asset = walletScreen.getLibAsset();
     if (!asset) return;
     const txFeeInWei = getTransactionFeeWei();
     const balanceInLIB = big2str(BigInt(asset.balance), 18).slice(0, -12);
@@ -33819,6 +33911,7 @@ class SendAssetFormModal {
     }
 
     this.updateBalanceAndFeeDisplay(balanceInLIB, feeInLIB, !isLib, stabilityFactor);
+    await this.refreshSendButtonDisabledState();
   }
 
   /**
@@ -33861,12 +33954,15 @@ class SendAssetFormModal {
   async reopen() {
     const tempUsername = this.usernameInput?.value;
     const tempAmount = this.amountInput?.value;
+    const tempUnit = this.balanceSymbol.textContent;
     const tempMemo = this.memoInput?.value;
     await this.close();
     this.username = tempUsername;
     if (!await this.open()) return;
     this.amountInput.value = tempAmount;
+    this.balanceSymbol.textContent = tempUnit;
     this.memoInput.value = tempMemo || '';
+    await this.updateAvailableBalance();
     if (this.foundAddressObject.address && !this.needTollInfo) await this.validateForm();
   }
 
@@ -33884,7 +33980,6 @@ class SendAssetFormModal {
    */
   resetForm(){
     this.sendForm?.reset();
-    PopupSelect.syncAll(this.sendForm);
     this.usernameAvailable.textContent = '';
     this.balanceWarning.textContent = '';
   }
@@ -33986,6 +34081,7 @@ const sendAssetFormModal = new SendAssetFormModal();
 
 class SendAssetConfirmModal {
   constructor() {
+    this.payment = null;
   }
 
   load() {
@@ -34011,13 +34107,17 @@ class SendAssetConfirmModal {
     this.cancelButton.addEventListener('click', this.close.bind(this));
   }
 
-  open() {
-    openModal(this.modal);
+  open(payment) {
+    if (!openModal(this.modal)) return false;
+    this.payment = payment;
+    return true;
   }
 
   close() {
-    this.modal.classList.remove('active');
+    this.payment = null;
+    this.modal?.classList.remove('active');
   }
+
   isActive() {
     return this.modal?.classList.contains('active') || false;
   }
@@ -34031,14 +34131,19 @@ class SendAssetConfirmModal {
    */
   async handleSendAsset(event) {
     event.preventDefault();
-    const selectedAsset = sendAssetFormModal.getSelectedAsset();
+    const payment = this.payment;
+    if (!payment) {
+      this.close();
+      return;
+    }
+    const selectedAsset = walletScreen.getLibAsset();
     if (!selectedAsset) {
-      showToast('Selected Liberdus asset is unavailable.', 3000, 'warning');
+      showToast('Liberdus asset is unavailable.', 3000, 'warning');
       this.close();
       return;
     }
 
-    const rawInput = sendAssetFormModal.usernameInput.value.trim();
+    const rawInput = payment.username;
     if (isValidEthereumAddress(rawInput)) {
       showToast('Address not supported; enter username instead.', 0, 'error');
       return;
@@ -34053,18 +34158,20 @@ class SendAssetConfirmModal {
     const wallet = myData.wallet;
     const assetIndex = wallet.assets.indexOf(selectedAsset);
     if (assetIndex < 0) {
-      showToast('Selected Liberdus asset is unavailable.', 0, 'error');
+      showToast('Liberdus asset is unavailable.', 0, 'error');
       return;
     }
-    const amount = bigxnum2big(wei, sendAssetFormModal.amountInput.value);
-    const memoIn = sendAssetFormModal.memoInput.value || '';
-    const memo = memoIn.trim();
+    const amount = payment.amountWei;
+    const memo = payment.memo;
     const keys = myAccount.keys;
     let toAddress;
 
     // Validate amount including transaction fee
-    if (!(await validateBalance(amount, assetIndex))) {
+    const hasBalance = await validateBalance(amount, assetIndex);
+    if (this.payment !== payment) return;
+    if (!hasBalance) {
       await getNetworkParams();
+      if (this.payment !== payment) return;
       const txFeeInLIB = getTransactionFeeWei();
       const balance = BigInt(wallet.assets[assetIndex].balance);
       const amountStr = big2str(amount, 18).slice(0, -16);
@@ -34089,6 +34196,7 @@ class SendAssetConfirmModal {
           const data = await response.json();
   */
       const data = await queryNetwork(`/address/${usernameHash}`);
+      if (this.payment !== payment) return;
       if (!data || !data.address) {
         showToast('Username not found', 0, 'error');
         return;
@@ -34112,6 +34220,7 @@ class SendAssetConfirmModal {
 
     // Ensure recipient keys exist locally; function handles local check and network fetch.
     await ensureContactKeys(toAddress);
+    if (this.payment !== payment) return;
     const recipientPubKey = myData.contacts[toAddress]?.public;
     const pqRecPubKey = myData.contacts[toAddress]?.pqPublic;
     let pqEncSharedKey = '';
@@ -34206,9 +34315,9 @@ class SendAssetConfirmModal {
       }
 
       // hidden input field retryOfTxId value is not an empty string
-      if (sendAssetFormModal.retryTxIdInput.value) {
+      if (payment.retryTxId) {
         // remove from myData use txid from hidden field retryOfPaymentTxId
-        removeFailedTx(sendAssetFormModal.retryTxIdInput.value, toAddress);
+        removeFailedTx(payment.retryTxId, toAddress);
 
         // clear the field
         failedTransactionModal.txid = '';
@@ -34324,7 +34433,6 @@ class ReceiveModal {
 
   load() {
     this.modal = document.getElementById('receiveModal');
-    this.assetSelect = document.getElementById('receiveAsset');
     this.amountInput = document.getElementById('receiveAmount');
     this.memoInput = document.getElementById('receiveMemo');
     this.displayAddress = document.getElementById('displayAddress');
@@ -34343,7 +34451,6 @@ class ReceiveModal {
     this.displayAddress.addEventListener('click', () => this.copyAddress());
     
     // QR code updates
-    this.assetSelect.addEventListener('change', () => this.handleAssetChange());
     this.amountInput.addEventListener('input', () => this.amountInput.value = normalizeUnsignedFloat(this.amountInput.value));
     this.amountInput.addEventListener('input', () => this.scheduleQRCode());
     this.memoInput.addEventListener('input', () => this.scheduleQRCode());
@@ -34356,7 +34463,6 @@ class ReceiveModal {
     this.session = { account: myAccount };
     this.amountInput.value = '';
     this.memoInput.value = '';
-    walletScreen.populateAssetSelect(this.assetSelect);
     this.receiveBalanceSymbol.textContent = 'LIB';
     this.toggleReceiveBalanceButton.disabled = false;
     this.updateDisplayAddress();
@@ -34382,19 +34488,9 @@ class ReceiveModal {
     if (this.qrcodeContainer) this.qrcodeContainer.innerHTML = '';
   }
 
-  getSelectedAsset() {
-    return walletScreen.getAsset(this.assetSelect.value);
-  }
-
   scheduleQRCode() {
     clearTimeout(this.qrTimer);
     this.qrTimer = setTimeout(() => this.updateQRCode(), 300);
-  }
-
-  handleAssetChange() {
-    const asset = this.getSelectedAsset();
-    this.receiveBalanceSymbol.textContent = asset?.symbol || 'LIB';
-    this.updateDisplayAddress();
   }
 
   updateDisplayAddress() {
@@ -34428,7 +34524,7 @@ class ReceiveModal {
 
   // Create QR payment data object based on form values
   createQRPaymentData() {
-    const asset = this.getSelectedAsset();
+    const asset = walletScreen.getLibAsset();
     const paymentData = {
       u: this.session.account.username,
       i: asset?.id || 'liberdus',
@@ -34528,7 +34624,7 @@ class ReceiveModal {
     if (!this.isCurrentSession(session)) return;
     this.toggleReceiveBalanceButton.disabled = true;
     try {
-      const asset = this.getSelectedAsset();
+      const asset = walletScreen.getLibAsset();
       const tokenSymbol = asset?.symbol || 'LIB';
       const isShowingToken = this.receiveBalanceSymbol.textContent !== 'USD';
       const tokenPrice = Number(asset?.price);
@@ -36873,22 +36969,39 @@ async function checkPendingTransactionsOnce() {
     const pendingTxInfo = myData.pending[i];
     const { txid, type, submittedts } = pendingTxInfo;
     const reactionPending = pendingTxInfo.reactionPending;
+    const isPendingMessage = type === 'message' && !reactionPending && !pendingTxInfo.editPending;
     const isPendingDaoTransaction = isDaoTransactionType(type);
     if (reactionPending && reactionPending.status !== 'pending') {
+      continue;
+    }
+    if (isPendingMessage && (!isOnline || document.visibilityState === 'hidden')) {
       continue;
     }
 
     if (submittedts < eightSecondsAgo) {
 
       let endpointPath = `/transaction/${txid}`;
-      if (submittedts < twentySecondsAgo || submittedts < thirtySecondsAgo) {
+      if (submittedts < twentySecondsAgo) {
         endpointPath = `/collector/api/transaction?appReceiptId=${txid}`;
       }
       //console.log(`DEBUG: txid ${txid} endpointPath: ${endpointPath}`);
-      const res = await queryNetwork(endpointPath);
-      if (myAccount !== account) return;
+      let res;
+      if (isPendingMessage) {
+        const result = await chatModal.checkPendingMessageReceipt(pendingTxInfo, endpointPath);
+        if (myAccount !== account) return;
+        if (result.cancelled || !isOnline || document.visibilityState === 'hidden') continue;
+        res = result.response;
+      } else {
+        res = await queryNetwork(endpointPath);
+        if (myAccount !== account) return;
+      }
       //console.log(`DEBUG: txid ${txid} res: ${JSON.stringify(res)}`);
-      if (submittedts < thirtySecondsAgo && (res.transaction === null || Object.keys(res.transaction).length === 0)) {
+      const receipt = res?.transaction;
+      const confirmationTimedOut = isPendingMessage
+        ? receipt?.success !== true && receipt?.success !== false
+          && getCorrectedTimestamp() - pendingTxInfo.checkedts >= ChatModal.CONFIRMATION_WINDOW_MS
+        : submittedts < thirtySecondsAgo && (!receipt || Object.keys(receipt).length === 0);
+      if (confirmationTimedOut) {
         console.error(`DEBUG: txid ${txid} timed out, removing completely`);
         if (reactionPending) {
           const outcome = settleAndQueueReactionCleanup(pendingTxInfo, 'failure');
@@ -38107,10 +38220,29 @@ class ThumbnailCache {
     this.dbName = 'liberdus_thumbnails';
     this.storeName = 'thumbnails';
     this.fullImageStoreName = 'fullImages';
-    this.dbVersion = 2;
+    this.dbVersion = 3;
     this.db = null;
     this.openPromise = null;
     this.maxCacheSize = 50 * 1024 * 1024; // 50MB in bytes
+  }
+
+  /**
+   * Resolve a shared attachment-storage ID from a fetch URL or a backup key.
+   * @param {string} urlOrId - HTTP(S) /get/{id} URL or an exported attachment ID
+   * @returns {string} Attachment ID, independent of hostname, scheme, and port
+   */
+  static getAttachmentId(urlOrId) {
+    if (typeof urlOrId !== 'string' || !urlOrId) {
+      throw new Error('Missing attachment URL or ID');
+    }
+    if (/^[^/:?#\s]+$/.test(urlOrId)) return urlOrId;
+
+    const url = new URL(urlOrId);
+    const match = url.pathname.match(/^\/get\/([^/]+)\/?$/);
+    if (!/^https?:$/.test(url.protocol) || !match) {
+      throw new Error('Invalid attachment URL');
+    }
+    return match[1];
   }
 
   /**
@@ -38160,21 +38292,153 @@ class ThumbnailCache {
       };
 
       request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        // Create object store if it doesn't exist
-        if (!db.objectStoreNames.contains(this.storeName)) {
-          const store = db.createObjectStore(this.storeName, { keyPath: 'url' });
-          store.createIndex('cachedAt', 'cachedAt', { unique: false });
-        }
-
-        if (!db.objectStoreNames.contains(this.fullImageStoreName)) {
-          const store = db.createObjectStore(this.fullImageStoreName, { keyPath: 'url' });
-          store.createIndex('cachedAt', 'cachedAt', { unique: false });
-        }
+        this.runMigrations(request.transaction, event.oldVersion);
       };
     });
 
     return this.openPromise;
+  }
+
+  /**
+   * Each entry upgrades the schema to its one-based version and calls done when finished.
+   * Continue synchronously or from an IndexedDB callback to keep the transaction active.
+   * @returns {Array<(transaction: IDBTransaction, done: () => void) => void>}
+   */
+  get migrations() {
+    return [this.migrateToVersion1, this.migrateToVersion2, this.migrateToVersion3];
+  }
+
+  /**
+   * Run every required version in order within the same upgrade transaction.
+   * @param {IDBTransaction} transaction
+   * @param {number} oldVersion
+   */
+  runMigrations(transaction, oldVersion) {
+    const migrations = this.migrations;
+    let version = oldVersion;
+
+    const next = () => {
+      if (version >= transaction.db.version) return;
+      try {
+        const migration = migrations[version];
+        if (!migration) throw new Error(`Missing attachment cache migration to version ${version + 1}`);
+        version++;
+        migration.call(this, transaction, next);
+      } catch (error) {
+        console.warn('Failed to upgrade attachment caches:', error);
+        transaction.abort();
+      }
+    };
+    next();
+  }
+
+  /**
+   * Version 1 introduced URL-keyed thumbnails.
+   * @param {IDBTransaction} transaction
+   * @param {() => void} done
+   */
+  migrateToVersion1(transaction, done) {
+    const store = ThumbnailCache.ensureLegacyStore(transaction, this.storeName);
+    // Wait for schema requests before starting the next version.
+    store.count().onsuccess = done;
+  }
+
+  /**
+   * Version 2 added URL-keyed full images.
+   * @param {IDBTransaction} transaction
+   * @param {() => void} done
+   */
+  migrateToVersion2(transaction, done) {
+    const store = ThumbnailCache.ensureLegacyStore(transaction, this.fullImageStoreName);
+    store.count().onsuccess = done;
+  }
+
+  /**
+   * Version 3 preserves ID-keyed stores and converts URL keys to attachment IDs.
+   * @param {IDBTransaction} transaction
+   * @param {() => void} done
+   */
+  migrateToVersion3(transaction, done) {
+    const db = transaction.db;
+    const storeNames = [this.storeName, this.fullImageStoreName];
+    let remaining = storeNames.length;
+    const storeFinished = () => {
+      remaining--;
+      if (remaining === 0) done();
+    };
+
+    for (const storeName of storeNames) {
+      const source = ThumbnailCache.ensureLegacyStore(transaction, storeName);
+      if (source.keyPath === 'id') {
+        source.count().onsuccess = storeFinished;
+        continue;
+      }
+
+      const store = db.createObjectStore(`${storeName}_ids`, { keyPath: 'id' });
+      store.createIndex('cachedAt', 'cachedAt', { unique: false });
+      ThumbnailCache.migrateStore(source, store, storeFinished);
+    }
+  }
+
+  /**
+   * Create missing historical stores while preserving and validating existing schemas.
+   * @param {IDBTransaction} transaction
+   * @param {string} storeName
+   * @returns {IDBObjectStore}
+   */
+  static ensureLegacyStore(transaction, storeName) {
+    const db = transaction.db;
+    const store = db.objectStoreNames.contains(storeName)
+      ? transaction.objectStore(storeName)
+      : db.createObjectStore(storeName, { keyPath: 'url' });
+
+    if (store.keyPath !== 'url' && store.keyPath !== 'id') {
+      throw new Error(`Unsupported attachment cache key path: ${storeName}`);
+    }
+    if (!store.indexNames.contains('cachedAt')) {
+      store.createIndex('cachedAt', 'cachedAt', { unique: false });
+    }
+    return store;
+  }
+
+  /**
+   * Copy legacy records without loading all cached blobs into memory.
+   * Keep the newest timestamp when hostname aliases resolve to the same ID.
+   * @param {IDBObjectStore} source
+   * @param {IDBObjectStore} destination
+   * @param {() => void} done
+   */
+  static migrateStore(source, destination, done) {
+    const request = source.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        // Swap stores only after copying; an aborted upgrade restores the original.
+        const storeName = source.name;
+        source.transaction.db.deleteObjectStore(storeName);
+        destination.name = storeName;
+        done();
+        return;
+      }
+
+      const { url, ...record } = cursor.value;
+      let id;
+      try {
+        id = ThumbnailCache.getAttachmentId(url);
+      } catch (error) {
+        console.warn('Failed to migrate cached attachment:', error);
+        source.transaction.abort();
+        return;
+      }
+
+      const existing = destination.get(id);
+      existing.onsuccess = () => {
+        if (!existing.result || record.cachedAt > existing.result.cachedAt) {
+          destination.put({ ...record, id });
+        }
+        cursor.continue();
+      };
+    };
   }
 
   /**
@@ -38377,12 +38641,13 @@ class ThumbnailCache {
 
   /**
    * Save a thumbnail to IndexedDB
-   * @param {string} attachmentUrl - The attachment URL (used as key)
+   * @param {string} attachmentUrl - The attachment URL or exported attachment ID
    * @param {Blob} thumbnailBlob - The thumbnail blob to store
    * @param {string} originalType - Original MIME type
    * @returns {Promise<void>}
    */
   async save(attachmentUrl, thumbnailBlob, originalType) {
+    const id = ThumbnailCache.getAttachmentId(attachmentUrl);
     if (!this.db) {
       await this.init();
     }
@@ -38401,7 +38666,7 @@ class ThumbnailCache {
       const store = tx.objectStore(this.storeName);
 
       const data = {
-        url: attachmentUrl,
+        id,
         thumbnail: thumbnailBlob,
         originalType: originalType,
         cachedAt: Date.now()
@@ -38422,10 +38687,11 @@ class ThumbnailCache {
 
   /**
    * Retrieve a cached thumbnail from IndexedDB
-   * @param {string} attachmentUrl - The attachment URL
+   * @param {string} attachmentUrl - The attachment URL or exported attachment ID
    * @returns {Promise<Blob|null>} The thumbnail blob or null if not found
    */
   async get(attachmentUrl) {
+    const id = ThumbnailCache.getAttachmentId(attachmentUrl);
     if (!this.db) {
       await this.init();
     }
@@ -38433,7 +38699,7 @@ class ThumbnailCache {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction([this.storeName], 'readonly');
       const store = tx.objectStore(this.storeName);
-      const request = store.get(attachmentUrl);
+      const request = store.get(id);
 
       request.onsuccess = () => {
         const result = request.result;
@@ -38453,11 +38719,12 @@ class ThumbnailCache {
 
   /**
    * Delete a cached thumbnail from IndexedDB
-   * @param {string} attachmentUrl - The attachment URL (key)
+   * @param {string} attachmentUrl - The attachment URL or exported attachment ID
    * @returns {Promise<void>}
    */
   async delete(attachmentUrl) {
     if (!attachmentUrl) return;
+    const id = ThumbnailCache.getAttachmentId(attachmentUrl);
     if (!this.db) {
       await this.init();
     }
@@ -38465,7 +38732,7 @@ class ThumbnailCache {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction([this.storeName], 'readwrite');
       const store = tx.objectStore(this.storeName);
-      const request = store.delete(attachmentUrl);
+      const request = store.delete(id);
 
       request.onsuccess = () => resolve();
 
@@ -38478,7 +38745,7 @@ class ThumbnailCache {
 
   /**
    * Export all thumbnails as an object with base64-encoded data
-   * @returns {Promise<Object>} Object mapping url to { data: base64, type: mimeType, originalType: string }
+   * @returns {Promise<Object>} Object mapping attachment ID to { data: base64, type: mimeType, originalType: string }
    */
   async exportAll() {
     if (!this.db) {
@@ -38492,20 +38759,20 @@ class ThumbnailCache {
 
       request.onsuccess = async () => {
         const results = request.result;
-        const thumbnails = {};
+        const thumbnails = Object.create(null);
 
         for (const item of results) {
-          if (item.url && item.thumbnail) {
+          if (item.id && item.thumbnail) {
             try {
               // Convert blob to base64
               const base64 = await this.blobToBase64(item.thumbnail);
-              thumbnails[item.url] = {
+              thumbnails[item.id] = {
                 data: base64,
                 type: item.thumbnail.type || 'image/jpeg',
                 originalType: item.originalType || 'image/jpeg'
               };
             } catch (e) {
-              console.warn(`Failed to export thumbnail for ${item.url}:`, e);
+              console.warn(`Failed to export thumbnail for ${item.id}:`, e);
             }
           }
         }
@@ -38522,7 +38789,7 @@ class ThumbnailCache {
 
   /**
    * Import thumbnails from exported data
-   * @param {Object} thumbnailsData - Object mapping url to { data: base64, type: mimeType, originalType: string }
+   * @param {Object} thumbnailsData - Object mapping attachment IDs or legacy URLs to { data: base64, type: mimeType, originalType: string }
    * @param {boolean} overwrite - Whether to overwrite existing thumbnails
    * @returns {Promise<number>} Number of thumbnails imported
    */
@@ -38537,22 +38804,22 @@ class ThumbnailCache {
 
     let importedCount = 0;
 
-    for (const [url, thumbInfo] of Object.entries(thumbnailsData)) {
+    for (const [urlOrId, thumbInfo] of Object.entries(thumbnailsData)) {
       if (!thumbInfo || !thumbInfo.data) continue;
 
       try {
         // Check if thumbnail already exists
         if (!overwrite) {
-          const existing = await this.get(url);
+          const existing = await this.get(urlOrId);
           if (existing) continue;
         }
 
         // Convert base64 back to blob
         const blob = this.base64ToBlob(thumbInfo.data, thumbInfo.type || 'image/jpeg');
-        await this.save(url, blob, thumbInfo.originalType || thumbInfo.type || 'image/jpeg');
+        await this.save(urlOrId, blob, thumbInfo.originalType || thumbInfo.type || 'image/jpeg');
         importedCount++;
       } catch (e) {
-        console.warn(`Failed to import thumbnail for ${url}:`, e);
+        console.warn(`Failed to import thumbnail for ${urlOrId}:`, e);
       }
     }
 
@@ -39332,10 +39599,11 @@ class FullImageCache {
   }
 
   async getRecord(attachmentUrl) {
+    const id = ThumbnailCache.getAttachmentId(attachmentUrl);
     const db = await this.database.init();
     const transaction = db.transaction(this.database.fullImageStoreName, 'readonly');
     const store = transaction.objectStore(this.database.fullImageStoreName);
-    return this.getRequestResult(store.get(attachmentUrl));
+    return this.getRequestResult(store.get(id));
   }
 
   async getCacheSize() {
@@ -39354,6 +39622,7 @@ class FullImageCache {
     if (!(blob instanceof Blob)) throw new Error('Full-image cache requires a Blob');
     if (blob.size > this.maxCacheSize) return false;
 
+    const id = ThumbnailCache.getAttachmentId(attachmentUrl);
     const db = await this.database.init();
     if (shouldCache && !shouldCache()) return false;
 
@@ -39370,10 +39639,10 @@ class FullImageCache {
       if (cursor) {
         const recordSize = Number(cursor.value?.size || 0);
         currentSize += recordSize;
-        if (cursor.value?.url === attachmentUrl) {
+        if (cursor.primaryKey === id) {
           existingSize = recordSize;
         } else {
-          evictionCandidates.push({ url: cursor.primaryKey, size: recordSize });
+          evictionCandidates.push({ id: cursor.primaryKey, size: recordSize });
         }
         cursor.continue();
         return;
@@ -39382,12 +39651,12 @@ class FullImageCache {
       let bytesToFree = Math.max(0, currentSize - existingSize + blob.size - this.maxCacheSize);
       for (const record of evictionCandidates) {
         if (bytesToFree <= 0) break;
-        store.delete(record.url);
+        store.delete(record.id);
         bytesToFree -= record.size;
       }
 
       store.put({
-        url: attachmentUrl,
+        id,
         mimeType,
         size: blob.size,
         blob,
@@ -39400,9 +39669,10 @@ class FullImageCache {
   }
 
   async delete(attachmentUrl) {
+    const id = ThumbnailCache.getAttachmentId(attachmentUrl);
     const db = await this.database.init();
     const transaction = db.transaction(this.database.fullImageStoreName, 'readwrite');
-    transaction.objectStore(this.database.fullImageStoreName).delete(attachmentUrl);
+    transaction.objectStore(this.database.fullImageStoreName).delete(id);
     await this.waitForTransaction(transaction);
   }
 
