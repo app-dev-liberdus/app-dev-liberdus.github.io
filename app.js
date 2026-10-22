@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'd'; // Also increment this when you increment version.html
+const version = 'e'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -2539,6 +2539,11 @@ class WalletScreen {
       }
     }
 
+    if (!network.faucetUrl) {
+      showToast('Faucet not available', 0, 'error');
+      return;
+    }
+
     const toastId = showToast('Requesting from faucet...', 0, 'loading');
     try {
       this.isFaucetRequestInProgress = true;
@@ -2550,9 +2555,7 @@ class WalletScreen {
       };
       await signObj(payload, myAccount.keys);
       
-      const faucetUrl = network.faucetUrl || 'https://dev.liberdus.com:3355/faucet';
-      
-      const response = await fetch(faucetUrl, {
+      const response = await fetch(network.faucetUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -20553,6 +20556,11 @@ class StakeValidatorModal {
    * @returns {Promise<void>}
    */
   async requestFromFaucet() {
+    if (!network.faucetUrl) {
+      showToast('Faucet not available', 0, 'error');
+      return;
+    }
+
     const toastId = showToast('Requesting from faucet...', 0, 'loading');
     try {
       const payload = {
@@ -20563,9 +20571,7 @@ class StakeValidatorModal {
       };
       await signObj(payload, myAccount.keys);
       
-      const faucetUrl = network.faucetUrl || 'https://dev.liberdus.com:3355/faucet';
-      
-      const response = await fetch(faucetUrl, {
+      const response = await fetch(network.faucetUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -23667,7 +23673,6 @@ class ChatModal {
     const networkName = walletNetwork?.id === payment.networkId && walletNetwork.chainId === payment.chainId
       ? walletNetwork.name : `EVM chain ${payment.chainId}`;
     const transactionHash = payment.transactionHash;
-    const shortHash = `${transactionHash.slice(0, 10)}…${transactionHash.slice(-8)}`;
     const transactionUrl = evmAssets.getPaymentExplorerUrl(payment);
     const tokenUrl = evmAssets.getPaymentTokenExplorerUrl(payment);
     return `
@@ -23679,9 +23684,6 @@ class ChatModal {
         <div class="evm-payment-meta">
           <div class="intents-payment-verified">${escapeHtml(paymentStatusLabel(verified))}</div>
           <div class="evm-payment-footer">
-            <div class="evm-payment-transaction">Tx ${transactionUrl
-              ? `<a href="${escapeHtmlAttribute(transactionUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtmlAttribute(transactionHash)}" aria-label="View transaction ${escapeHtmlAttribute(transactionHash)} in block explorer">${escapeHtml(shortHash)} <span aria-hidden="true">↗</span></a>`
-              : `<span title="${escapeHtmlAttribute(transactionHash)}">${escapeHtml(shortHash)}</span>`}</div>
             ${messageTimeHTML}
           </div>
         </div>
