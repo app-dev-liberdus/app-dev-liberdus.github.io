@@ -47,52 +47,66 @@ export function isValidDaoDecimalString(value) {
 
 export const DAO_CONFIG_CHANGE_OPTIONS = {
   governance: [
-    { key: 'claimDuration', path: 'current.dao.claimDuration', label: 'Claim Duration', valueType: 'number', validation: 'integer' },
-    { key: 'graceDuration', path: 'current.dao.graceDuration', label: 'Grace Duration', valueType: 'number', validation: 'integer' },
-    { key: 'minimumSpendUsdStr', path: 'current.dao.minimumSpendUsdStr', label: 'Minimum Vote Spend', valueType: 'string', validation: 'decimalString' },
-    { key: 'pctBurned', path: 'current.dao.pctBurned', label: 'Percent Burned', valueType: 'number', validation: 'integer' },
-    { key: 'proposalFeeUsdStr', path: 'current.dao.proposalFeeUsdStr', label: 'Proposal Fee', valueType: 'string', validation: 'decimalString' },
-    { key: 'reviewDuration', path: 'current.dao.reviewDuration', label: 'Review Duration', valueType: 'number', validation: 'integer' },
+    { key: 'claimDuration', path: 'current.dao.claimDuration', label: 'Claim Duration', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
+    { key: 'committeeAddresses', path: 'current.dao.committeeAddresses', label: 'Committee Addresses', valueType: 'array', validation: 'committeeAddresses' },
+    { key: 'graceDuration', path: 'current.dao.graceDuration', label: 'Grace Duration', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
+    { key: 'minimumSpendUsdStr', path: 'current.dao.minimumSpendUsdStr', label: 'Minimum Vote Spend', valueType: 'string', validation: 'decimalString', unit: 'USD' },
+    { key: 'pctBurned', path: 'current.dao.pctBurned', label: 'Percent Burned', valueType: 'number', validation: 'integer', unit: 'percent' },
+    { key: 'proposalFeeUsdStr', path: 'current.dao.proposalFeeUsdStr', label: 'Proposal Fee', valueType: 'string', validation: 'decimalString', unit: 'USD' },
+    { key: 'reviewDuration', path: 'current.dao.reviewDuration', label: 'Review Duration', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
     { key: 'voteExponent', path: 'current.dao.voteExponent', label: 'Vote Exponent', valueType: 'number', validation: 'decimal' },
-    { key: 'voteThresholdUsdStr', path: 'current.dao.voteThresholdUsdStr', label: 'Vote Threshold', valueType: 'string', validation: 'decimalString' },
-    { key: 'votingDuration', path: 'current.dao.votingDuration', label: 'Voting Duration', valueType: 'number', validation: 'integer' },
+    { key: 'voteThresholdUsdStr', path: 'current.dao.voteThresholdUsdStr', label: 'Vote Threshold', valueType: 'string', validation: 'decimalString', unit: 'USD' },
+    { key: 'votingDuration', path: 'current.dao.votingDuration', label: 'Voting Duration', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
   ],
   economic: [
-    { key: 'certCycleDuration', path: 'current.certCycleDuration', label: 'Certificate Cycle Duration', valueType: 'number', validation: 'integer' },
+    { key: 'activeVersion', path: 'current.activeVersion', label: 'Active Validator Version', valueType: 'string', validation: 'text' },
+    { key: 'archiver', path: 'current.archiver', label: 'Archiver Versions', valueType: 'object', validation: 'archiverVersions' },
+    { key: 'certCycleDuration', path: 'current.certCycleDuration', label: 'Certificate Cycle Duration', valueType: 'number', validation: 'integer', unit: 'cycles' },
+    { key: 'defaultTollUsdStr', path: 'current.defaultTollUsdStr', label: 'Default Toll', valueType: 'string', validation: 'decimalString', unit: 'USD' },
     { key: 'enableNodeSlashing', path: 'current.enableNodeSlashing', label: 'Enable Node Slashing', valueType: 'boolean', validation: 'boolean' },
-    { key: 'maintenanceInterval', path: 'current.maintenanceInterval', label: 'Maintenance Interval', valueType: 'number', validation: 'integer' },
-    { key: 'messageMaxLength', path: 'current.messageMaxLength', label: 'Message Max Length', valueType: 'number', validation: 'integer' },
-    { key: 'messageRetentionDays', path: 'current.messageRetentionDays', label: 'Message Retention Days', valueType: 'number', validation: 'integer' },
-    { key: 'nodeRewardInterval', path: 'current.nodeRewardInterval', label: 'Node Reward Interval', valueType: 'number', validation: 'integer' },
-    { key: 'restakeCooldown', path: 'current.restakeCooldown', label: 'Restake Cooldown', valueType: 'number', validation: 'integer' },
+    { key: 'goldenTicketServerUrl', path: 'current.goldenTicketServerUrl', label: 'Golden Ticket Server URL', valueType: 'string', validation: 'url' },
+    { key: 'latestVersion', path: 'current.latestVersion', label: 'Latest Validator Version', valueType: 'string', validation: 'text' },
+    { key: 'maintenanceFee', path: 'current.maintenanceFee', label: 'Maintenance Fee (base units)', valueType: 'bigint', validation: 'integer' },
+    { key: 'maintenanceInterval', path: 'current.maintenanceInterval', label: 'Maintenance Interval', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
+    { key: 'messageMaxLength', path: 'current.messageMaxLength', label: 'Message Max Length', valueType: 'number', validation: 'integer', unit: 'messages' },
+    { key: 'messageRetentionDays', path: 'current.messageRetentionDays', label: 'Message Retention Days', valueType: 'number', validation: 'integer', unit: 'days' },
+    { key: 'minTollUsdStr', path: 'current.minTollUsdStr', label: 'Minimum Toll', valueType: 'string', validation: 'decimalString', unit: 'USD' },
+    { key: 'minVersion', path: 'current.minVersion', label: 'Minimum Validator Version', valueType: 'string', validation: 'text' },
+    { key: 'nodePenaltyUsdStr', path: 'current.nodePenaltyUsdStr', label: 'Node Penalty', valueType: 'string', validation: 'decimalString', unit: 'USD' },
+    { key: 'nodeRewardAmountUsdStr', path: 'current.nodeRewardAmountUsdStr', label: 'Node Reward Amount', valueType: 'string', validation: 'decimalString', unit: 'USD' },
+    { key: 'nodeRewardInterval', path: 'current.nodeRewardInterval', label: 'Node Reward Interval', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
+    { key: 'restakeCooldown', path: 'current.restakeCooldown', label: 'Restake Cooldown', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
     { key: 'enableLeftNetworkEarlySlashing', path: 'current.slashing.enableLeftNetworkEarlySlashing', label: 'Enable Left Network Early Slashing', valueType: 'boolean', validation: 'boolean' },
     { key: 'enableNodeRefutedSlashing', path: 'current.slashing.enableNodeRefutedSlashing', label: 'Enable Node Refuted Slashing', valueType: 'boolean', validation: 'boolean' },
     { key: 'enableSyncTimeoutSlashing', path: 'current.slashing.enableSyncTimeoutSlashing', label: 'Enable Sync Timeout Slashing', valueType: 'boolean', validation: 'boolean' },
-    { key: 'leftNetworkEarlyPenaltyPercent', path: 'current.slashing.leftNetworkEarlyPenaltyPercent', label: 'Left Network Early Penalty Percent', valueType: 'number', validation: 'decimal' },
-    { key: 'nodeRefutedPenaltyPercent', path: 'current.slashing.nodeRefutedPenaltyPercent', label: 'Node Refuted Penalty Percent', valueType: 'number', validation: 'decimal' },
-    { key: 'syncTimeoutPenaltyPercent', path: 'current.slashing.syncTimeoutPenaltyPercent', label: 'Sync Timeout Penalty Percent', valueType: 'number', validation: 'decimal' },
+    { key: 'leftNetworkEarlyPenaltyPercent', path: 'current.slashing.leftNetworkEarlyPenaltyPercent', label: 'Left Network Early Penalty Percent', valueType: 'number', validation: 'decimal', unit: 'percent', unitHint: '0.2 = 20%' },
+    { key: 'nodeRefutedPenaltyPercent', path: 'current.slashing.nodeRefutedPenaltyPercent', label: 'Node Refuted Penalty Percent', valueType: 'number', validation: 'decimal', unit: 'percent', unitHint: '0.2 = 20%' },
+    { key: 'syncTimeoutPenaltyPercent', path: 'current.slashing.syncTimeoutPenaltyPercent', label: 'Sync Timeout Penalty Percent', valueType: 'number', validation: 'decimal', unit: 'percent', unitHint: '0.2 = 20%' },
+    { key: 'stabilityFactorStr', path: 'current.stabilityFactorStr', label: 'Stability Factor', valueType: 'string', validation: 'decimalString', unit: 'USD per LIB' },
     { key: 'stabilityScaleDiv', path: 'current.stabilityScaleDiv', label: 'Stability Scale Divisor', valueType: 'number', validation: 'integer' },
     { key: 'stabilityScaleMul', path: 'current.stabilityScaleMul', label: 'Stability Scale Multiplier', valueType: 'number', validation: 'integer' },
-    { key: 'stakeLockTime', path: 'current.stakeLockTime', label: 'Stake Lock Time', valueType: 'number', validation: 'integer' },
-    { key: 'tollNetworkTaxPercent', path: 'current.tollNetworkTaxPercent', label: 'Toll Network Tax Percent', valueType: 'number', validation: 'integer' },
-    { key: 'tollTimeout', path: 'current.tollTimeout', label: 'Toll Timeout', valueType: 'number', validation: 'integer' },
+    { key: 'stakeLockTime', path: 'current.stakeLockTime', label: 'Stake Lock Time', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
+    { key: 'stakeRequiredUsdStr', path: 'current.stakeRequiredUsdStr', label: 'Stake Required', valueType: 'string', validation: 'decimalString', unit: 'USD' },
+    { key: 'tollNetworkTaxPercent', path: 'current.tollNetworkTaxPercent', label: 'Toll Network Tax Percent', valueType: 'number', validation: 'integer', unit: 'percent' },
+    { key: 'tollTimeout', path: 'current.tollTimeout', label: 'Toll Timeout', valueType: 'number', validation: 'integer', unit: 'milliseconds' },
+    { key: 'transactionFeeUsdStr', path: 'current.transactionFeeUsdStr', label: 'Transaction Fee', valueType: 'string', validation: 'decimalString', unit: 'USD' },
     { key: 'txPause', path: 'current.txPause', label: 'Pause Transactions', valueType: 'boolean', validation: 'boolean' },
   ],
   protocol: [
-    { key: 'minNodes', path: 'config.p2p.minNodes', label: 'Min Nodes', valueType: 'number', validation: 'integer' },
-    { key: 'maxNodes', path: 'config.p2p.maxNodes', label: 'Max Nodes', valueType: 'number', validation: 'integer' },
-    { key: 'baselineNodes', path: 'config.p2p.baselineNodes', label: 'Baseline Nodes', valueType: 'number', validation: 'integer' },
-    { key: 'cycleDuration', path: 'config.p2p.cycleDuration', label: 'Cycle Duration', valueType: 'number', validation: 'integer' },
+    { key: 'minNodes', path: 'config.p2p.minNodes', label: 'Min Nodes', valueType: 'number', validation: 'integer', unit: 'nodes' },
+    { key: 'maxNodes', path: 'config.p2p.maxNodes', label: 'Max Nodes', valueType: 'number', validation: 'integer', unit: 'nodes' },
+    { key: 'baselineNodes', path: 'config.p2p.baselineNodes', label: 'Baseline Nodes', valueType: 'number', validation: 'integer', unit: 'nodes' },
+    { key: 'cycleDuration', path: 'config.p2p.cycleDuration', label: 'Cycle Duration', valueType: 'number', validation: 'integer', unit: 'seconds' },
     { key: 'allowEndUserTxnInjections', path: 'config.p2p.allowEndUserTxnInjections', label: 'Allow End User Transactions', valueType: 'boolean', validation: 'boolean' },
-    { key: 'amountToGrow', path: 'config.p2p.amountToGrow', label: 'Amount To Grow', valueType: 'number', validation: 'integer' },
-    { key: 'amountToShrink', path: 'config.p2p.amountToShrink', label: 'Amount To Shrink', valueType: 'number', validation: 'integer' },
-    { key: 'maxJoinedPerCycle', path: 'config.p2p.maxJoinedPerCycle', label: 'Max Joined Per Cycle', valueType: 'number', validation: 'integer' },
-    { key: 'maxDesiredMultiplier', path: 'config.p2p.maxDesiredMultiplier', label: 'Max Desired Multiplier', valueType: 'number', validation: 'decimal' },
-    { key: 'maxShrinkMultiplier', path: 'config.p2p.maxShrinkMultiplier', label: 'Max Shrink Multiplier', valueType: 'number', validation: 'decimal' },
+    { key: 'amountToGrow', path: 'config.p2p.amountToGrow', label: 'Amount To Grow', valueType: 'number', validation: 'integer', unit: 'nodes' },
+    { key: 'amountToShrink', path: 'config.p2p.amountToShrink', label: 'Amount To Shrink', valueType: 'number', validation: 'integer', unit: 'nodes' },
+    { key: 'maxJoinedPerCycle', path: 'config.p2p.maxJoinedPerCycle', label: 'Max Joined Per Cycle', valueType: 'number', validation: 'integer', unit: 'nodes per cycle' },
+    { key: 'maxDesiredMultiplier', path: 'config.p2p.maxDesiredMultiplier', label: 'Max Desired Multiplier', valueType: 'number', validation: 'decimal', unit: 'multiplier' },
+    { key: 'maxShrinkMultiplier', path: 'config.p2p.maxShrinkMultiplier', label: 'Max Shrink Multiplier', valueType: 'number', validation: 'decimal', unit: 'fraction' },
     { key: 'syncBoostEnabled', path: 'config.p2p.syncBoostEnabled', label: 'Sync Boost Enabled', valueType: 'boolean', validation: 'boolean' },
     { key: 'limitRate', path: 'config.rateLimiting.limitRate', label: 'Limit Rate', valueType: 'boolean', validation: 'boolean' },
-    { key: 'nodesPerConsensusGroup', path: 'config.sharding.nodesPerConsensusGroup', label: 'Nodes Per Consensus Group', valueType: 'number', validation: 'integer' },
-    { key: 'voterPercentage', path: 'config.stateManager.voterPercentage', label: 'Voter Percentage', valueType: 'number', validation: 'decimal' },
+    { key: 'nodesPerConsensusGroup', path: 'config.sharding.nodesPerConsensusGroup', label: 'Nodes Per Consensus Group', valueType: 'number', validation: 'integer', unit: 'nodes' },
+    { key: 'voterPercentage', path: 'config.stateManager.voterPercentage', label: 'Voter Percentage', valueType: 'number', validation: 'decimal', unit: 'fraction' },
   ],
 };
 
@@ -447,6 +461,13 @@ function normalizeDaoDraftChanges(changes, actionOptionCount) {
       const key = requireDaoDraftString(change?.key, 'DAO parameter key');
       if (seenKeys.has(key)) throw new Error(`DAO proposal option ${optionIndex + 1} has duplicate ${key} changes`);
       seenKeys.add(key);
+      if (key === 'committeeAddresses') {
+        return {
+          key,
+          value: JSON.stringify(daoRepo.parseCommitteeAddresses(change.value)),
+          current: JSON.stringify(daoRepo.parseCommitteeAddresses(change.current)),
+        };
+      }
       return {
         key,
         value: requireDaoDraftString(change?.value, 'DAO parameter value'),
@@ -2246,6 +2267,54 @@ async function refreshInternal({ force, signal }) {
 }
 
 export const daoRepo = {
+  minCommitteeMembers: 4,
+  maxCommitteeMembers: 10,
+
+  /** Hide only the network padding of a canonical wallet-derived address. */
+  toCommitteeDisplayAddress(address) {
+    return address.length === 64 && address.endsWith('0'.repeat(24))
+      ? address.slice(0, 40)
+      : address;
+  },
+
+  /** Return a new list in network format, preserving the entered order. */
+  normalizeCommitteeAddresses(addresses) {
+    if (!Array.isArray(addresses)) throw new Error('Committee addresses must be a list');
+    if (addresses.length < this.minCommitteeMembers || addresses.length > this.maxCommitteeMembers) {
+      throw new Error(`Enter ${this.minCommitteeMembers}–${this.maxCommitteeMembers} committee addresses (currently ${addresses.length})`);
+    }
+
+    const seen = new Set();
+    return addresses.map((value, addressIndex) => {
+      const address = typeof value === 'string' ? value.trim().replace(/^0x/i, '').toLowerCase() : '';
+      let message = '';
+      if (!address) message = `Enter committee address ${addressIndex + 1}`;
+      else if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(address)) {
+        message = `Committee address ${addressIndex + 1} must contain 40 or 64 hexadecimal characters, with an optional 0x prefix`;
+      }
+      const normalized = address.padEnd(64, '0');
+      if (!message && seen.has(normalized)) message = `Committee address ${addressIndex + 1} is a duplicate`;
+      if (message) {
+        const error = new Error(message);
+        error.addressIndex = addressIndex;
+        throw error;
+      }
+      seen.add(normalized);
+      return normalized;
+    });
+  },
+
+  parseCommitteeAddresses(value) {
+    if (typeof value !== 'string') throw new Error('Committee addresses must be a JSON array string');
+    let addresses;
+    try {
+      addresses = JSON.parse(value);
+    } catch {
+      throw new Error('Committee addresses must be a JSON array string');
+    }
+    return this.normalizeCommitteeAddresses(addresses);
+  },
+
   reset() {
     _store = null;
     _loadingPromise = null;

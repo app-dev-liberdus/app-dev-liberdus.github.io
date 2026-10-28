@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'f'; // Also increment this when you increment version.html
+const version = 'g'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -245,7 +245,7 @@ const wei = 10n ** BigInt(weiDigits);
 //network.explorer.url = "http://test.liberdus.com:6001"   // URL of the chain explorer
 const MAX_MEMO_BYTES = 1000; // 1000 bytes for memos
 const MENU_NAVIGATION_LOCK_MS = 400;
-const MAX_CHAT_MESSAGE_BYTES = 1000; // 1000 bytes for chat messages
+const MAX_CHAT_MESSAGE_BYTES = 10000; // UTF-8 bytes for chat messages
 const BRIDGE_USERNAME = 'liberdusbridge';
 const TRANSACTION_TIMESTAMP_OFFSET_MS = 500; // Transaction offset to allow for slow connections
 const IS_DEV_NETWORK = network?.name === 'Devnet';
@@ -2602,7 +2602,7 @@ class MenuModal {
     this.inviteButton = document.getElementById('openInvite');
     this.inviteButton.addEventListener('click', () => inviteModal.open());
     this.explorerButton = document.getElementById('openExplorer');
-    this.explorerButton.addEventListener('click', () => this.handleExternalClick('./explorer', 'explorer'));
+    this.explorerButton.addEventListener('click', () => this.handleExternalClick(normalizeHttpsUrl(network.explorerUrl), 'explorer'));
     this.networkButton = document.getElementById('openMonitor');
     this.networkButton.addEventListener('click', () => this.handleExternalClick('./network', 'network'));
     this.helpButton = document.getElementById('openHelp');
@@ -3665,6 +3665,7 @@ function formatDurationParts(milliseconds) {
 class AddProposalModal {
   load() {
     this.modal = document.getElementById('addProposalModal');
+    this.bindCommitteeAddressCopy(this.modal);
     this.closeButton = document.getElementById('closeAddProposalModal');
     this.cancelButton = document.getElementById('cancelAddProposal');
     this.form = document.getElementById('addProposalForm');
@@ -3938,6 +3939,7 @@ class AddProposalModal {
   }
 
   clearValidationError(target) {
+    if (target?.closest?.('[data-dao-committee-addresses]')) return;
     const control = PopupSelect.getVisibleControl(target);
     const highlight = this.getValidationHighlight(control);
     highlight?.classList.remove('dao-form-error');
@@ -4016,7 +4018,10 @@ class AddProposalModal {
 
     const options = catalog
       .map((option) => {
-        const current = getPathValue(source, option.path);
+        let current = getPathValue(source, option.path);
+        if (current !== undefined && option.validation === 'committeeAddresses') {
+          current = daoRepo.normalizeCommitteeAddresses(current);
+        }
         return current === undefined ? null : { ...option, current };
       })
       .filter(Boolean);
@@ -4131,12 +4136,7 @@ class AddProposalModal {
               </svg>
             </button>
             <button type="button" class="btn btn--secondary dao-form-remove-button" data-dao-remove-milestone aria-label="Remove milestone ${milestoneNumber}" title="Remove milestone ${milestoneNumber}" ${removeDisabled}>
-              <svg class="dao-project-milestone-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                <line x1="10" y1="11" x2="10" y2="17"></line>
-                <line x1="14" y1="11" x2="14" y2="17"></line>
-              </svg>
+              ${this.renderRemoveIcon()}
             </button>
           </div>
         </div>
@@ -4262,6 +4262,28 @@ class AddProposalModal {
     return { changes: [] };
   }
 
+  renderRemoveIcon() {
+    return `<svg class="dao-form-remove-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <polyline points="3 6 5 6 21 6"></polyline>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      <line x1="10" y1="11" x2="10" y2="17"></line>
+      <line x1="14" y1="11" x2="14" y2="17"></line>
+    </svg>`;
+  }
+
+  createChange(key) {
+    const option = this.getConfigOption(key);
+    if (option.validation === 'archiverVersions') {
+      return { key, value: { ...option.current } };
+    }
+    return {
+      key,
+      value: option.validation === 'committeeAddresses'
+        ? option.current.map(daoRepo.toCommitteeDisplayAddress)
+        : '',
+    };
+  }
+
   getOptionLabel(optionIndex) {
     return `Option ${optionIndex + 1}`;
   }
@@ -4272,7 +4294,7 @@ class AddProposalModal {
 
     const validKeys = new Set(configOptions.map((option) => option.key));
     const templateChanges = this.options[0].changes.filter((change) => validKeys.has(change.key));
-    const changes = templateChanges.length ? templateChanges : [{ key: configOptions[0].key, value: '' }];
+    const changes = templateChanges.length ? templateChanges : [this.createChange(configOptions[0].key)];
 
     this.options = this.options.map((proposalOption, optionIndex) => {
       if (optionIndex === 0) return { ...proposalOption, changes };
@@ -4280,7 +4302,9 @@ class AddProposalModal {
       const valuesByKey = new Map(proposalOption.changes.map((change) => [change.key, change.value]));
       return {
         ...proposalOption,
-        changes: changes.map((change) => ({ key: change.key, value: valuesByKey.get(change.key) ?? '' })),
+        changes: changes.map((change) => valuesByKey.has(change.key)
+          ? { key: change.key, value: valuesByKey.get(change.key) }
+          : this.createChange(change.key)),
       };
     });
   }
@@ -4311,6 +4335,9 @@ class AddProposalModal {
     ].join('');
 
     PopupSelect.enhanceAll(this.optionsList);
+    this.optionsList.querySelectorAll('[data-dao-committee-addresses]').forEach((group) => {
+      this.validateCommitteeAddressGroup(group);
+    });
 
     if (this.addOptionButton) {
       this.addOptionButton.disabled = configOptions.length === 0 || isEmergency || this.options.length >= 9;
@@ -4330,7 +4357,7 @@ class AddProposalModal {
       <section class="dao-form-option" data-dao-option="${optionIndex}">
         <div class="dao-form-row-title">
           <label>${label}</label>
-          <button type="button" class="btn btn--secondary dao-form-remove-button" data-dao-remove-option="${optionIndex}" ${removeDisabled}>Remove option</button>
+          <button type="button" class="btn btn--secondary dao-form-remove-button" data-dao-remove-option="${optionIndex}" aria-label="Remove option ${optionIndex + 1}" title="Remove option ${optionIndex + 1}" ${removeDisabled}>${this.renderRemoveIcon()}</button>
         </div>
         <div class="dao-form-section-header"><label>Parameter Changes</label></div>
         <div class="dao-form-list">${changesHtml}</div>
@@ -4366,27 +4393,39 @@ class AddProposalModal {
     const parameterControl = isTemplate
       ? `<select id="${configId}" class="form-control" aria-label="Select parameter for Option ${optionNumber}, change ${changeNumber}" data-dao-change-key data-dao-option-index="${optionIndex}" data-dao-change-index="${changeIndex}" required>${selectOptions}</select>`
       : `<input id="${configId}" class="form-control dao-form-current-value" type="text" value="${escapeDaoFormAttribute(option.label)}" readonly />`;
+    let currentControl;
+    if (option.validation === 'committeeAddresses') {
+      currentControl = `<div id="${currentId}" class="form-control dao-form-current-value" role="group" aria-label="Current committee addresses">${this.renderCommitteeAddresses(option.current)}</div>`;
+    } else if (option.validation === 'archiverVersions') {
+      currentControl = this.renderArchiverVersionEditor(option.current, currentId, '', true);
+    } else {
+      currentControl = `<input id="${currentId}" class="form-control dao-form-current-value" type="text" value="${escapeDaoFormAttribute(option.current)}" readonly />`;
+    }
+    const valueLineClass = option.validation === 'committeeAddresses' ? ' dao-form-change-line--committee' : '';
+    const valueTypeLabel = option.unit
+      ? `${option.valueType} in ${option.unit}${option.unitHint ? ` (${option.unitHint})` : ''}`
+      : option.valueType;
 
     return `
       <div class="dao-form-row dao-form-row--change" data-dao-change-row>
         <div class="dao-form-row-title">
           <label>Parameter change ${changeNumber}</label>
-          ${isTemplate ? `<button type="button" class="btn btn--secondary dao-form-remove-button" data-dao-remove-change="${optionIndex}:${changeIndex}" ${removeDisabled}>Remove</button>` : ''}
+          ${isTemplate ? `<button type="button" class="btn btn--secondary dao-form-remove-button" data-dao-remove-change="${optionIndex}:${changeIndex}" aria-label="Remove parameter change ${changeNumber} from Option ${optionNumber}" title="Remove parameter change ${changeNumber} from Option ${optionNumber}" ${removeDisabled}>${this.renderRemoveIcon()}</button>` : ''}
         </div>
         <div class="dao-form-change-box">
           <div class="dao-form-change-line">
             <label for="${configId}">${isTemplate ? 'Select' : 'Parameter'}${isTemplate ? ' <span class="dao-form-required" aria-hidden="true">*</span>' : ''}</label>
             ${parameterControl}
           </div>
-          <div class="dao-form-change-line">
+          <div class="dao-form-change-line${valueLineClass}">
             <label for="${currentId}">Current</label>
-            <input id="${currentId}" class="form-control dao-form-current-value" type="text" value="${escapeDaoFormAttribute(option.current)}" readonly />
+            ${currentControl}
           </div>
-          <div class="dao-form-change-line">
+          <div class="dao-form-change-line${valueLineClass}">
             <label for="${proposedId}">Enter <span class="dao-form-required" aria-hidden="true">*</span></label>
             ${this.renderProposedValueControl(option, change.value, proposedId, dataAttributes)}
           </div>
-          <div class="dao-form-meta">${escapeHtml(option.path)} · ${escapeHtml(option.valueType)}</div>
+          <div class="dao-form-meta">${escapeHtml(option.path)} · ${escapeHtml(valueTypeLabel)}</div>
         </div>
       </div>
     `;
@@ -4394,6 +4433,10 @@ class AddProposalModal {
 
   renderProposedValueControl(option, value, id, dataAttributes) {
     switch (`${option.valueType}:${option.validation}`) {
+      case 'array:committeeAddresses':
+        return this.renderCommitteeAddressEditor(value, id, dataAttributes);
+      case 'object:archiverVersions':
+        return this.renderArchiverVersionEditor(value, id, dataAttributes, false);
       case 'boolean:boolean':
         return `
           <select id="${id}" class="form-control" ${dataAttributes} required>
@@ -4404,6 +4447,12 @@ class AddProposalModal {
         `;
       case 'string:decimalString':
         return `<input id="${id}" class="form-control" ${dataAttributes} type="text" inputmode="decimal" maxlength="34" value="${escapeDaoFormAttribute(value)}" required />`;
+      case 'string:text':
+        return `<input id="${id}" class="form-control" ${dataAttributes} type="text" value="${escapeDaoFormAttribute(value)}" required />`;
+      case 'string:url':
+        return `<input id="${id}" class="form-control" ${dataAttributes} type="url" value="${escapeDaoFormAttribute(value)}" required />`;
+      case 'bigint:integer':
+        return `<input id="${id}" class="form-control" ${dataAttributes} type="text" inputmode="numeric" pattern="[0-9]+" value="${escapeDaoFormAttribute(value)}" required />`;
       case 'number:integer':
         return `<input id="${id}" class="form-control" ${dataAttributes} type="number" step="1" inputmode="numeric" min="0" value="${escapeDaoFormAttribute(value)}" required />`;
       case 'number:decimal':
@@ -4411,6 +4460,139 @@ class AddProposalModal {
       default:
         throw new Error(`Unsupported DAO parameter validation: ${option.valueType}:${option.validation}`);
     }
+  }
+
+  renderArchiverVersionEditor(value, id, dataAttributes, readOnly) {
+    const fields = [
+      ['minVersion', 'Minimum version'],
+      ['activeVersion', 'Active version'],
+      ['latestVersion', 'Latest version'],
+    ];
+    return `<div id="${id}" class="dao-form-list" role="group" aria-label="Archiver versions" data-dao-archiver-versions>${fields.map(([key, label]) => `
+      <div class="form-group">
+        <label for="${id}-${key}">${label}</label>
+        ${readOnly
+          ? `<input id="${id}-${key}" class="form-control dao-form-current-value" type="text" value="${escapeDaoFormAttribute(value[key])}" data-dao-archiver-field="${key}" readonly />`
+          : this.renderProposedValueControl({ key, valueType: 'string', validation: 'text' }, value[key], `${id}-${key}`, `${dataAttributes} data-dao-archiver-field="${key}"`)}
+      </div>
+    `).join('')}</div>`;
+  }
+
+  validateArchiverVersions(value, valueInput) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw this.createValidationError('Enter all three archiver versions', valueInput);
+    }
+    const versions = {};
+    for (const key of ['minVersion', 'activeVersion', 'latestVersion']) {
+      if (typeof value[key] !== 'string' || !value[key].trim()) {
+        const input = valueInput?.closest('[data-dao-archiver-versions]')
+          ?.querySelector(`[data-dao-archiver-field="${key}"]`);
+        throw this.createValidationError('Enter all three archiver versions', input || valueInput);
+      }
+      versions[key] = value[key].trim();
+    }
+    return versions;
+  }
+
+  renderCommitteeAddresses(value) {
+    let addresses;
+    try {
+      addresses = Array.isArray(value)
+        ? daoRepo.normalizeCommitteeAddresses(value)
+        : daoRepo.parseCommitteeAddresses(value);
+    } catch {
+      return escapeHtml(formatDaoDetailValue(value));
+    }
+    return `<span class="dao-committee-address-list" role="list">${addresses.map((address) => {
+      const displayAddress = daoRepo.toCommitteeDisplayAddress(address);
+      return `<span role="listitem"><button type="button" class="dao-committee-address"
+        data-dao-copy-address="${displayAddress}" title="Copy address" aria-label="Copy address ${displayAddress}">${displayAddress}</button></span>`;
+    }).join('')}</span>`;
+  }
+
+  renderCommitteeAddressEditor(addresses, id, dataAttributes) {
+    const rows = addresses.map((address, index) => `
+      <div class="dao-committee-address-row">
+        <input id="${id}Address${index}" class="form-control" type="text" value="${escapeDaoFormAttribute(address)}"
+          ${dataAttributes} data-dao-committee-address-index="${index}" aria-label="Committee address ${index + 1}"
+          aria-describedby="${id}Help ${id}Error" autocomplete="off" autocapitalize="none" spellcheck="false" required />
+        <button type="button" class="btn btn--secondary dao-form-remove-button" data-dao-remove-committee-address="${index}" aria-label="Remove committee address ${index + 1}" title="Remove committee address ${index + 1}">${this.renderRemoveIcon()}</button>
+      </div>
+    `).join('');
+    return `
+      <div id="${id}" class="dao-committee-address-editor" data-dao-committee-addresses ${dataAttributes}
+        role="group" aria-label="Proposed committee addresses" aria-describedby="${id}Help ${id}Error" tabindex="-1">
+        ${rows}
+        <button type="button" class="btn btn--secondary dao-form-add-button" data-dao-add-committee-address ${addresses.length >= daoRepo.maxCommitteeMembers ? 'disabled' : ''}>
+          <span class="dao-form-add-icon" aria-hidden="true"><span class="plus-glyph">+</span></span>
+          <span>Add address</span>
+        </button>
+        <p id="${id}Help" class="dao-form-help">${daoRepo.minCommitteeMembers}–${daoRepo.maxCommitteeMembers} unique addresses. The 0x prefix is optional.</p>
+        <p id="${id}Error" class="dao-committee-address-error hidden" data-dao-committee-error aria-live="polite"></p>
+      </div>
+    `;
+  }
+
+  bindCommitteeAddressCopy(container) {
+    container?.addEventListener('click', this.handleCommitteeAddressCopy);
+  }
+
+  async handleCommitteeAddressCopy(event) {
+    const button = event.target.closest('[data-dao-copy-address]');
+    if (!button) return;
+    try {
+      await navigator.clipboard.writeText(button.dataset.daoCopyAddress);
+      showToast('Address copied to clipboard', 2000, 'success');
+    } catch (error) {
+      console.error('Failed to copy:', error);
+      showToast('Failed to copy address', 0, 'error');
+    }
+  }
+
+  showCommitteeAddressError(group, error) {
+    const message = group.querySelector('[data-dao-committee-error]');
+    message.textContent = error?.message || '';
+    message.classList.toggle('hidden', !error);
+    group.setAttribute('aria-invalid', String(Boolean(error)));
+    this.getValidationHighlight(group)?.classList.toggle('dao-form-error', Boolean(error));
+    group.querySelectorAll('[data-dao-committee-address-index]').forEach((input) => {
+      input.setAttribute('aria-invalid', String(Number(input.dataset.daoCommitteeAddressIndex) === error?.addressIndex));
+    });
+  }
+
+  validateCommitteeAddressGroup(group) {
+    const change = this.options[Number(group.dataset.daoOptionIndex)].changes[Number(group.dataset.daoChangeIndex)];
+    try {
+      const addresses = daoRepo.normalizeCommitteeAddresses(change.value);
+      this.showCommitteeAddressError(group, null);
+      return { addresses, error: null };
+    } catch (error) {
+      this.showCommitteeAddressError(group, error);
+      error.validationTarget = group.querySelector(`[data-dao-committee-address-index="${error.addressIndex}"]`)
+        || group.querySelector('[data-dao-add-committee-address]');
+      return { addresses: null, error };
+    }
+  }
+
+  handleCommitteeAddressAction(button) {
+    const group = button.closest('[data-dao-committee-addresses]');
+    const change = this.options[Number(group.dataset.daoOptionIndex)].changes[Number(group.dataset.daoChangeIndex)];
+    let focusIndex;
+    if (button.matches('[data-dao-add-committee-address]')) {
+      if (change.value.length >= daoRepo.maxCommitteeMembers) return;
+      focusIndex = change.value.length;
+      change.value.push('');
+    } else {
+      const index = Number(button.dataset.daoRemoveCommitteeAddress);
+      change.value.splice(index, 1);
+      focusIndex = Math.min(index, change.value.length - 1);
+    }
+    const groupId = group.id;
+    this.renderOptions();
+    const updatedGroup = document.getElementById(groupId);
+    const focusTarget = updatedGroup.querySelector(`[data-dao-committee-address-index="${focusIndex}"]`)
+      || updatedGroup.querySelector('[data-dao-add-committee-address]');
+    focusTarget.focus();
   }
 
   addOption() {
@@ -4448,7 +4630,7 @@ class AddProposalModal {
       return;
     }
 
-    template.changes.push({ key: nextOption.key, value: '' });
+    template.changes.push(this.createChange(nextOption.key));
     this.synchronizeOptions();
     this.renderOptions();
     const parameterSelect = this.optionsList?.querySelector(
@@ -4458,6 +4640,11 @@ class AddProposalModal {
   }
 
   handleOptionsClick(event) {
+    const committeeButton = event.target.closest('[data-dao-add-committee-address], [data-dao-remove-committee-address]');
+    if (committeeButton) {
+      this.handleCommitteeAddressAction(committeeButton);
+      return;
+    }
     const addChangeButton = event.target.closest('[data-dao-add-parameter-change]');
     if (addChangeButton) {
       this.addParameterChange(Number(addChangeButton.dataset.daoAddParameterChange));
@@ -4493,7 +4680,18 @@ class AddProposalModal {
       const change = proposalOption.changes[Number(event.target.dataset.daoChangeIndex)];
       if (!change) return;
 
-      const value = normalizeDaoParameterInput(event.target.value);
+      if (event.target.matches('[data-dao-committee-address-index]')) {
+        change.value[Number(event.target.dataset.daoCommitteeAddressIndex)] = event.target.value;
+        this.validateCommitteeAddressGroup(event.target.closest('[data-dao-committee-addresses]'));
+        return;
+      }
+      if (event.target.matches('[data-dao-archiver-field]')) {
+        change.value[event.target.dataset.daoArchiverField] = event.target.value;
+        return;
+      }
+      const option = this.getConfigOption(change.key);
+      const isDecimalInput = option.valueType === 'number' || option.validation === 'decimalString';
+      const value = isDecimalInput ? normalizeDaoParameterInput(event.target.value) : event.target.value;
       event.target.value = value;
       change.value = value;
     }
@@ -4509,8 +4707,7 @@ class AddProposalModal {
     const proposalOption = this.options[optionIndex];
     const change = proposalOption?.changes[changeIndex];
     if (!change) return;
-    change.key = event.target.value;
-    change.value = '';
+    proposalOption.changes[changeIndex] = this.createChange(event.target.value);
     this.synchronizeOptions();
     this.renderOptions();
     PopupSelect.focus(this.optionsList?.querySelector(
@@ -4668,10 +4865,43 @@ class AddProposalModal {
         }
         seenKeys.add(option.key);
 
+        if (option.validation === 'committeeAddresses') {
+          const group = optionEl.querySelector(`[data-dao-committee-addresses][data-dao-change-index="${changeIndex}"]`);
+          const { addresses, error } = this.validateCommitteeAddressGroup(group);
+          if (error) throw error;
+          return {
+            key: option.key,
+            value: JSON.stringify(addresses),
+            current: JSON.stringify(option.current),
+          };
+        }
+
+        if (option.validation === 'archiverVersions') {
+          return {
+            key: option.key,
+            value: JSON.stringify(this.validateArchiverVersions(change.value, valueInput)),
+            current: JSON.stringify(option.current),
+          };
+        }
+
         const value = String(change.value || '').trim();
         const parameterType = `${option.valueType}:${option.validation}`;
-        const numericValue = Number(value);
+        const numericValue = option.valueType === 'number' ? Number(value) : null;
         if (!value) throw this.createValidationError(`Enter a proposed value for ${option.label}`, valueInput);
+        if (parameterType === 'bigint:integer' && !/^\d+$/.test(value)) {
+          throw this.createValidationError(`${option.label} must be a non-negative whole number`, valueInput);
+        }
+        if (parameterType === 'string:url') {
+          let url;
+          try {
+            url = new URL(value);
+          } catch {
+            throw this.createValidationError(`${option.label} must be an HTTP or HTTPS URL`, valueInput);
+          }
+          if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+            throw this.createValidationError(`${option.label} must be an HTTP or HTTPS URL`, valueInput);
+          }
+        }
         if (parameterType === 'boolean:boolean' && value !== 'true' && value !== 'false') {
           throw this.createValidationError(`${option.label} must be true or false`, valueInput);
         }
@@ -4702,6 +4932,9 @@ class AddProposalModal {
             `${option.label} must be a non-negative number`,
             valueInput,
           );
+        }
+        if (option.key === 'stabilityFactorStr' && !/[1-9]/.test(value)) {
+          throw this.createValidationError(`${option.label} must be greater than zero`, valueInput);
         }
 
         return {
@@ -4947,15 +5180,20 @@ function renderDaoProposalChangeRows(changes) {
   return changes
     .map((change) => {
       const key = change?.key || 'Unknown key';
-      const current = formatDaoDetailValue(change?.current);
-      const next = formatDaoDetailValue(change?.value);
+      const current = key === 'committeeAddresses'
+        ? addProposalModal.renderCommitteeAddresses(change.current)
+        : escapeHtml(formatDaoDetailValue(change?.current));
+      const next = key === 'committeeAddresses'
+        ? addProposalModal.renderCommitteeAddresses(change.value)
+        : escapeHtml(formatDaoDetailValue(change?.value));
+      const rowClass = key === 'committeeAddresses' ? ' proposal-change-row--committee' : '';
       return `
-        <div class="proposal-change-row">
+        <div class="proposal-change-row${rowClass}">
           <span>${escapeHtml(key)}</span>
           <div class="proposal-change-values">
-            <small><span>Current:</span><strong>${escapeHtml(current)}</strong></small>
+            <small><span>Current:</span><strong>${current}</strong></small>
             <span class="proposal-change-arrow" aria-hidden="true">&rarr;</span>
-            <small><span>New:</span><strong>${escapeHtml(next)}</strong></small>
+            <small><span>New:</span><strong>${next}</strong></small>
           </div>
         </div>
       `;
@@ -5193,6 +5431,7 @@ function renderDaoProjectProposalInfo(
 class ConfirmProposalModal {
   load() {
     this.modal = document.getElementById('confirmProposalModal');
+    addProposalModal.bindCommitteeAddressCopy(this.modal);
     this.closeButton = document.getElementById('closeConfirmProposalModal');
     this.title = document.getElementById('confirmProposalModalTitle');
     this.backButton = document.getElementById('backConfirmProposal');
@@ -6303,6 +6542,7 @@ function floorDaoVoteWeightEstimate(value) {
 class ProposalInfoModal {
   load() {
     this.modal = document.getElementById('proposalInfoModal');
+    addProposalModal.bindCommitteeAddressCopy(this.modal);
     this.closeButton = document.getElementById('closeProposalInfoModal');
     this.title = document.getElementById('proposalInfoModalTitle');
     this.content = document.getElementById('proposalInfoContent');
@@ -21376,7 +21616,7 @@ class ChatModal {
       const messageText = e.target.value;
       this.revalidateSendButtonState();
 
-      // Save draft (text is already limited to 2000 chars by maxlength attribute)
+      // Save draft
       this.debouncedSaveDraft(messageText);
     });
 
@@ -21927,6 +22167,8 @@ class ChatModal {
 
     // Show modal
     openModal(this.modal);
+
+    this.revalidateSendButtonState();
 
     // Clear unread count
     const totalUnread = contact.unread;
@@ -23674,7 +23916,6 @@ class ChatModal {
       ? walletNetwork.name : `EVM chain ${payment.chainId}`;
     const transactionHash = payment.transactionHash;
     const transactionUrl = evmAssets.getPaymentExplorerUrl(payment);
-    const tokenUrl = evmAssets.getPaymentTokenExplorerUrl(payment);
     return `
       <div class="intents-payment-message evm-payment-message" data-verified="${escapeHtmlAttribute(verified)}" data-evm-payment="${escapeHtmlAttribute(evmPaymentId(payment))}">
         <div class="evm-payment-label">Payment ${item.my ? 'sent' : 'received'}</div>
@@ -23690,11 +23931,52 @@ class ChatModal {
         <details class="evm-payment-details">
           <summary>Payment details</summary>
           <dl>
-            ${payment.contractAddress ? `<div><dt>Token contract</dt><dd>${this.renderEvmPaymentDetailLink(payment.contractAddress, tokenUrl, 'token contract')}</dd></div>` : ''}
             <div><dt>Network</dt><dd>${escapeHtml(networkName)} · Chain ID ${payment.chainId}</dd></div>
             <div><dt>Transaction</dt><dd>${this.renderEvmPaymentDetailLink(transactionHash, transactionUrl, 'transaction')}</dd></div>
           </dl>
         </details>
+      </div>`;
+  }
+
+  renderLibPaymentTransaction(transactionId) {
+    const code = `<code>${escapeHtml(transactionId)}</code>`;
+    const explorerUrl = normalizeHttpsUrl(network.explorerUrl);
+    if (!explorerUrl) return code;
+
+    const url = new URL(explorerUrl);
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/transaction/${transactionId}`;
+    url.search = '';
+    url.hash = '';
+    return `<a href="${escapeHtmlAttribute(url.href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtmlAttribute(transactionId)}" aria-label="View transaction ${escapeHtmlAttribute(transactionId)} in block explorer">${code} <span aria-hidden="true">↗</span></a>`;
+  }
+
+  renderLibPaymentMessage(item, messageTimeHTML) {
+    const amount = big2str(item.amount, 18);
+    const exactAmount = `${formatDisplayAmount(amount, 18)} ${item.symbol || 'LIB'}`;
+    const transactionId = normalizeTransactionId(item.txid);
+    return `
+      <div class="lib-payment-message">
+        <div class="lib-payment-heading">
+          <img class="lib-payment-logo" src="./media/liberdus_logo_50.png" alt="" width="20" height="20">
+          <div class="lib-payment-label">Payment ${item.my ? 'sent' : 'received'}</div>
+        </div>
+        <div class="payment-header">
+          <span class="payment-direction">${item.my ? '-' : '+'}</span>
+          <span class="payment-amount" title="${escapeHtmlAttribute(exactAmount)}">${escapeHtml(formatDisplayAmount(amount, 6))} <span class="lib-payment-unit">${escapeHtml(item.symbol || 'LIB')}</span></span>
+        </div>
+        <div class="lib-payment-network">Liberdus</div>
+        ${item.message ? `<section class="lib-payment-note" aria-label="Payment note"><div class="lib-payment-label">Note</div><div class="payment-memo">${linkifyUrls(item.message)}</div></section>` : ''}
+        <div class="lib-payment-meta">
+          ${item.status === 'failed' ? '<div class="lib-payment-status">Payment failed</div>' : ''}
+          ${messageTimeHTML}
+        </div>
+        ${transactionId ? `<details class="lib-payment-details">
+          <summary>Payment details</summary>
+          <dl>
+            <div><dt>Amount</dt><dd>${escapeHtml(exactAmount)}</dd></div>
+            <div><dt>Transaction</dt><dd>${this.renderLibPaymentTransaction(transactionId)}</dd></div>
+          </dl>
+        </details>` : ''}
       </div>`;
   }
 
@@ -23705,6 +23987,8 @@ class ChatModal {
     // Add txid attribute if available
     const txidAttribute = item.txid ? `data-txid="${escapeHtmlAttribute(item.txid)}"` : '';
     const statusAttribute = item.status ? `data-status="${escapeHtmlAttribute(item.status)}"` : '';
+    const showEditedDot = !item.my && item.edited && item.edited_timestamp && item.edited_timestamp > lastReadTs && !isDeleted(item);
+    const messageTimeHTML = `<div class="message-time">${timeString}${item.edited ? ' <span class="message-edited-label">edited</span>' : ''}${showEditedDot ? ' <span class="edited-new-dot" title="Edited since last read"></span>' : ''}</div>`;
 
     if (item.type === 'update_toll_required') {
       const statusText = escapeHtml(getUpdateTollRequiredPreviewText(item, contact));
@@ -23717,23 +24001,10 @@ class ChatModal {
 
     // Check if it's a payment based on the presence of the amount property (BigInt)
     if (typeof item.amount === 'bigint') {
-      // Assuming LIB (18 decimals) for now. TODO: Handle different asset decimals if needed.
-      // Format amount correctly using big2str
-      const amountStr = big2str(item.amount, 18);
-      const amountNum = parseFloat(amountStr);
-      const amountDisplay = `${amountNum.toFixed(6)} ${escapeHtml(item.symbol || 'LIB')}`;
-      const directionText = item.my ? '-' : '+';
       const messageClass = item.my ? 'sent' : 'received';
-      const showEditedDot = !item.my && item.edited && item.edited_timestamp && item.edited_timestamp > lastReadTs && !isDeleted(item);
-      // --- Render Payment Transaction ---
       return `
           <div class="message ${messageClass} payment-info" ${timestampAttribute} ${txidAttribute} ${statusAttribute}>
-            <div class="payment-header">
-              <span class="payment-direction">${directionText}</span>
-              <span class="payment-amount">${amountDisplay}</span>
-            </div>
-            ${item.message ? `<div class="payment-memo">${linkifyUrls(item.message)}</div>` : ''}
-            <div class="message-time">${timeString}${item.edited ? ' <span class="message-edited-label">edited</span>' : ''}${showEditedDot ? ' <span class="edited-new-dot" title="Edited since last read"></span>' : ''}</div>
+            ${this.renderLibPaymentMessage(item, messageTimeHTML)}
           </div>
         `;
     }
@@ -23819,9 +24090,6 @@ class ChatModal {
               `;
       }).join('');
     }
-
-    const showEditedDot = !item.my && item.edited && item.edited_timestamp && item.edited_timestamp > lastReadTs && !isDeleted(item);
-    const messageTimeHTML = `<div class="message-time">${timeString}${item.edited ? ' <span class="message-edited-label">edited</span>' : ''}${showEditedDot ? ' <span class="edited-new-dot" title="Edited since last read"></span>' : ''}</div>`;
 
     // --- Render message text (if any) ---
     let messageTextHTML = '';
@@ -24041,10 +24309,17 @@ class ChatModal {
       this.messagesList.querySelectorAll('.evm-payment-details[open]'),
       (details) => details.parentElement.dataset.evmPayment
     ));
+    const expandedLibPayments = new Set(Array.from(
+      this.messagesList.querySelectorAll('.lib-payment-details[open]'),
+      (details) => details.closest('.message').dataset.txid
+    ));
     // Replace the list once to avoid one DOM mutation per message.
     this.messagesList.innerHTML = range.html;
     for (const details of this.messagesList.querySelectorAll('.evm-payment-details')) {
       if (expandedPayments.has(details.parentElement.dataset.evmPayment)) details.open = true;
+    }
+    for (const details of this.messagesList.querySelectorAll('.lib-payment-details')) {
+      if (expandedLibPayments.has(details.closest('.message').dataset.txid)) details.open = true;
     }
     this.syncAllRenderedReactionChips();
     // Straight after rendering, ahead of the early returns below: it used to
@@ -25328,7 +25603,7 @@ class ChatModal {
     if (e.target.closest('.voice-message-speed-button')) return;
     if (e.target.closest('.voice-message-seek')) return;
     if (e.target.closest('.reply-quote')) return;
-    if (e.target.closest('.evm-payment-details')) return;
+    if (e.target.closest('.evm-payment-details, .lib-payment-details')) return;
 
     // Check if keyboard is open - if so, don't show context menu
     if (this.isKeyboardOpen()) {

@@ -2527,16 +2527,18 @@ input[type='file'].form-control::file-selector-button {
 }
 
 #addProposalModal .dao-form-remove-button {
+  align-items: center;
   background: #f6dddd;
   border: 1px solid #e8bbbb;
   border-radius: 8px;
   color: #8f3d3d;
+  display: inline-flex;
   flex: 0 0 auto;
-  font-size: 12px;
   height: 38px;
   min-height: 38px;
-  padding: 8px 10px;
-  width: auto;
+  justify-content: center;
+  padding: 0;
+  width: 32px;
 }
 
 #addProposalModal .dao-form-remove-button:not(:disabled):hover {
@@ -2565,6 +2567,75 @@ input[type='file'].form-control::file-selector-button {
   display: grid;
   gap: 8px;
   grid-template-columns: 82px minmax(0, 1fr);
+}
+
+.dao-committee-address-list {
+  display: grid;
+  font-family: var(--font-monospace);
+  gap: 6px;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.dao-committee-address {
+  background: none;
+  color: inherit;
+  font: inherit;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 0;
+}
+
+.dao-committee-address:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+#addProposalModal .dao-form-change-line--committee {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#addProposalModal .dao-proposal-form:has(.dao-committee-address-editor) {
+  padding-inline: 0;
+}
+
+#addProposalModal .dao-form-change-box:has(.dao-committee-address-editor) {
+  padding-inline: 0;
+}
+
+#addProposalModal .dao-committee-address-list {
+  font-size: clamp(9px, 2.8vw, 11px);
+}
+
+#addProposalModal .dao-committee-address-editor {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+#addProposalModal .dao-committee-address-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#addProposalModal .dao-committee-address-row input {
+  flex: 1;
+  font-family: var(--font-monospace);
+  font-size: clamp(8px, 2.5vw, 10px);
+  min-width: 0;
+  padding-inline: 6px;
+}
+
+#addProposalModal .dao-committee-address-error {
+  color: var(--danger-color);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+#addProposalModal .dao-committee-address-editor .dao-form-help {
+  margin: 0;
 }
 
 #addProposalModal .dao-form-meta,
@@ -2711,7 +2782,8 @@ input[type='file'].form-control::file-selector-button {
   width: 32px;
 }
 
-#addProposalModal .dao-project-milestone-action-icon {
+#addProposalModal .dao-project-milestone-action-icon,
+#addProposalModal .dao-form-remove-icon {
   fill: none;
   height: 17px;
   pointer-events: none;
@@ -3702,6 +3774,42 @@ input[type='file'].form-control::file-selector-button {
   font-size: 12px;
   line-height: 1.2;
   transform: translateY(-9px);
+}
+
+#confirmProposalModal .proposal-option-cards:has(.dao-committee-address-list),
+#proposalInfoModal .proposal-option-cards:has(.dao-committee-address-list) {
+  grid-auto-rows: auto;
+}
+
+#confirmProposalModal .proposal-change-row--committee,
+#proposalInfoModal .proposal-change-row--committee,
+#confirmProposalModal .proposal-change-row--committee .proposal-change-values,
+#proposalInfoModal .proposal-change-row--committee .proposal-change-values {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+#confirmProposalModal .proposal-change-row--committee .proposal-change-arrow,
+#proposalInfoModal .proposal-change-row--committee .proposal-change-arrow {
+  display: none;
+}
+
+#confirmProposalModal .proposal-change-row--committee small,
+#confirmProposalModal .proposal-change-row--committee strong,
+#proposalInfoModal .proposal-change-row--committee small,
+#proposalInfoModal .proposal-change-row--committee strong {
+  justify-items: stretch;
+  gap: 4px;
+}
+
+#confirmProposalModal .proposal-change-row--committee > span,
+#proposalInfoModal .proposal-change-row--committee > span {
+  text-align: center;
+}
+
+#confirmProposalModal .proposal-change-row--committee small > span,
+#proposalInfoModal .proposal-change-row--committee small > span {
+  text-align: left;
 }
 
 #confirmProposalModal .proposal-change-values small,
@@ -8720,92 +8828,126 @@ small {
 
 /* Styles for Payment Messages in Chat */
 
-/* Base styles for payment header (center, monospace, gap) */
-.payment-header {
+/* Native LIB receipts use the same hierarchy as the other payment cards. */
+.message.payment-info {
+  width: 316px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 16px 18px 12px;
+  border-radius: 20px;
+}
+.message.sent.payment-info { border-bottom-right-radius: 4px; }
+.message.received.payment-info { border-bottom-left-radius: 4px; }
+.lib-payment-message {
+  --lib-payment-divider: var(--border-color);
+  --lib-payment-secondary: var(--secondary-text-color);
+  --lib-payment-note-background: var(--background-color);
+  min-width: 0;
+}
+.message.sent .lib-payment-message {
+  --lib-payment-divider: rgba(255, 255, 255, 0.22);
+  --lib-payment-secondary: rgba(255, 255, 255, 0.8);
+  --lib-payment-note-background: rgba(255, 255, 255, 0.1);
+}
+.lib-payment-heading {
   display: flex;
-  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+.lib-payment-logo { width: 20px; height: 20px; flex-shrink: 0; }
+.lib-payment-label {
+  color: var(--lib-payment-secondary);
+  font-size: var(--chat-message-meta-font-size, var(--font-size-xs));
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.message.payment-info .payment-header {
+  display: flex;
   align-items: baseline;
-  gap: 10px;
-  margin-bottom: 8px;
-  padding: 30px 0; /* User adjusted */
-  font-family: Georgia, serif; /* Changed font family */
-  font-size: var(--font-size-sm); /* Base size for header */
-  text-align: center;
-}
-
-/* Styles for the direction/amount spans within the header */
-.payment-amount,
-.payment-direction {
-  font-weight: var(--font-weight-bold); /* Keep bold */
-  font-size: var(--font-size-base); /* Keep large */
-  /* Font family inherited from .payment-header */
-}
-
-/* Base styles for payment memo (italic, top border) */
-.payment-memo {
-  font-size: var(--font-size-sm);
-  font-style: italic;
-  opacity: 0.9;
-  margin-top: 4px;
-  border-top: 1px solid rgba(0, 0, 0, 0.1); /* User changed to solid */
-  padding-top: 4px;
-  white-space: normal;
-  overflow: hidden;
-  word-wrap: break-word;
-  word-break: break-all;
-}
-
-/* Make direction and amount stand out */
-.payment-amount,
-.payment-direction {
+  gap: 2px;
+  margin-top: 5px;
+  font-size: calc(var(--chat-message-font-size, var(--font-size-base)) * 1.5);
   font-weight: var(--font-weight-bold);
-  font-size: var(--font-size-base);
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
 }
-
-/* Common bubble padding */
-.message.sent.payment-info,
-.message.received.payment-info {
-  padding: 0.75rem 1rem;
-  /* Bubble background/color/border inherited from .message.sent/.received */
-  max-width: 85%; /* Set maximum width (adjust percentage if needed) */
-  width: 85%; /* Force width to max */
-  box-sizing: border-box; /* Include padding/border in width */
+.message.payment-info .payment-direction,
+.message.payment-info .payment-amount {
+  font-size: inherit;
 }
-
-/* --- Styling for elements INSIDE SENT payments --- */
-.message.sent.payment-info .payment-header {
-  color: white;
-  /* No bottom border needed */
+.payment-amount { min-width: 0; overflow-wrap: anywhere; }
+.lib-payment-unit { font-size: var(--chat-message-font-size, var(--font-size-base)); font-weight: var(--font-weight-medium); letter-spacing: normal; }
+.lib-payment-network {
+  margin-top: 5px;
+  color: var(--lib-payment-secondary);
+  font-size: var(--chat-message-meta-font-size, var(--font-size-xs));
 }
-.message.sent.payment-info .payment-memo {
-  color: rgba(255, 255, 255, 0.9);
-  border-top-color: rgba(255, 255, 255, 0.2);
+.lib-payment-note {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--lib-payment-note-background);
 }
-.message.sent.payment-info .payment-memo a {
-  color: white;
-  text-decoration: underline;
+.message.payment-info .payment-memo {
+  margin-top: 5px;
+  font-size: var(--chat-message-font-size, var(--font-size-base));
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
-.message.sent.payment-info .message-time {
-  color: rgba(255, 255, 255, 0.7);
+.lib-payment-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  border-top: 1px solid var(--lib-payment-divider);
+  margin-top: 16px;
+  padding-top: 12px;
+  color: var(--lib-payment-secondary);
 }
-
-/* --- Styling for elements INSIDE RECEIVED payments --- */
-.message.received.payment-info .payment-header {
-  color: var(--text-color);
-  width: 100%; /* Keep full width */
-  /* No bottom border needed (user removed) */
+.lib-payment-status {
+  margin-right: auto;
+  font-size: var(--chat-message-meta-font-size, var(--font-size-xs));
 }
-.message.received.payment-info .payment-memo {
-  color: var(--secondary-text-color);
-  border-top-color: rgba(0, 0, 0, 0.15);
+.lib-payment-meta .message-time { margin-top: 0; color: inherit; }
+.lib-payment-details { margin-top: 10px; cursor: default; user-select: text; }
+.lib-payment-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  list-style: none;
+  font-size: var(--chat-message-meta-font-size, var(--font-size-xs));
+  cursor: pointer;
 }
-.message.received.payment-info .payment-memo a {
-  color: var(--primary-color);
-  text-decoration: underline;
+.lib-payment-details summary::-webkit-details-marker { display: none; }
+.lib-payment-details summary::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+  margin-right: 2px;
 }
-.message.received.payment-info .message-time {
-  color: var(--secondary-text-color);
-  opacity: 0.7;
+.lib-payment-details[open] summary::after { transform: rotate(225deg); }
+.lib-payment-details dl {
+  display: grid;
+  gap: 10px;
+  margin: 6px 0 0;
+  font-size: var(--chat-message-meta-font-size, var(--font-size-xs));
+}
+.lib-payment-details dt { opacity: 0.75; }
+.lib-payment-details dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.lib-payment-details a { color: var(--primary-color); text-decoration: underline; text-underline-offset: 3px; }
+.lib-payment-details code { font-family: var(--font-monospace); font-size: inherit; }
+@media (pointer: coarse) {
+  .lib-payment-details summary { min-height: 44px; }
+  .lib-payment-details a { display: block; min-height: 44px; }
 }
 
 /* Styles for Payment Previews in Chat List */
@@ -12925,33 +13067,33 @@ button.multichain-token-chip:hover {
   --evm-payment-secondary: rgba(255, 255, 255, 0.8);
   --evm-payment-note-background: rgba(255, 255, 255, 0.1);
 }
-.evm-payment-label { color: var(--evm-payment-secondary); font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); letter-spacing: 0.06em; text-transform: uppercase; }
+.evm-payment-label { color: var(--evm-payment-secondary); font-size: var(--chat-message-meta-font-size, var(--font-size-xs)); font-weight: var(--font-weight-medium); letter-spacing: 0.06em; text-transform: uppercase; }
 .evm-payment-message .intents-payment-amount {
   margin-top: 5px;
-  font-size: var(--font-size-xl);
+  font-size: calc(var(--chat-message-font-size, var(--font-size-base)) * 1.5);
   letter-spacing: -0.025em;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.evm-payment-unit { font-size: var(--font-size-base); font-weight: var(--font-weight-medium); letter-spacing: normal; }
-.evm-payment-message .intents-payment-chain { color: var(--evm-payment-secondary); opacity: 1; }
+.evm-payment-unit { font-size: var(--chat-message-font-size, var(--font-size-base)); font-weight: var(--font-weight-medium); letter-spacing: normal; }
+.evm-payment-message .intents-payment-chain { color: var(--evm-payment-secondary); font-size: var(--chat-message-meta-font-size, var(--font-size-xs)); opacity: 1; }
 .evm-payment-note { margin-top: 16px; padding: 12px; border-radius: 10px; background: var(--evm-payment-note-background); }
 .evm-payment-message .intents-payment-note {
   margin-top: 5px;
-  font-size: var(--font-size-base);
+  font-size: var(--chat-message-font-size, var(--font-size-base));
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .evm-payment-meta { border-top: 1px solid var(--evm-payment-divider); margin-top: 16px; padding-top: 12px; }
-.evm-payment-message .intents-payment-verified { margin-top: 0; }
+.evm-payment-message .intents-payment-verified { margin-top: 0; font-size: var(--chat-message-meta-font-size, var(--font-size-xs)); }
 .evm-payment-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
 .evm-payment-message .evm-payment-footer .message-time { align-self: center; margin-top: 0; white-space: nowrap; }
 .evm-payment-details { margin-top: 10px; cursor: default; user-select: text; }
-.evm-payment-details summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; list-style: none; font-size: var(--font-size-xs); cursor: pointer; }
+.evm-payment-details summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; list-style: none; font-size: var(--chat-message-meta-font-size, var(--font-size-xs)); cursor: pointer; }
 .evm-payment-details summary::-webkit-details-marker { display: none; }
 .evm-payment-details summary::after { content: ''; width: 6px; height: 6px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg); margin-right: 2px; }
 .evm-payment-details[open] summary::after { transform: rotate(225deg); }
-.evm-payment-details dl { display: grid; gap: 10px; margin: 6px 0 0; font-size: var(--font-size-xs); }
+.evm-payment-details dl { display: grid; gap: 10px; margin: 6px 0 0; font-size: var(--chat-message-meta-font-size, var(--font-size-xs)); }
 .evm-payment-details dt { opacity: 0.75; }
 .evm-payment-details dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 .evm-payment-details a { color: var(--primary-color); text-decoration: underline; text-underline-offset: 3px; }
