@@ -1692,6 +1692,70 @@ function normalizeDaoVoteReminderSchedule(value) {
   return { votingEndsAt, estimatedClaimEndsAt, reminderExpiresAt };
 }
 
+export const DAO_USER_VOTE_CAST_STATUSES = Object.freeze({
+  SUBMITTED: 'submitted',
+});
+
+function normalizeDaoUserVoteCastTxid(value) {
+  const txid = typeof value === 'string' ? value.trim() : '';
+  return /^[0-9a-f]{64}$/i.test(txid) ? txid.toLowerCase() : '';
+}
+
+function normalizeDaoUserVoteCastWeights(value) {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 10) return null;
+  if (!value.every((weight) => Number.isSafeInteger(weight) && weight >= 0)) return null;
+  if (!value.some((weight) => weight > 0)) return null;
+  return value.slice();
+}
+
+function normalizeDaoUserVoteCastOptionWeights(value, expectedLength) {
+  if (!Array.isArray(value) || value.length !== expectedLength) return null;
+  const optionWeights = value.map((weight) => parseDaoUnsignedBigInt(weight));
+  return optionWeights.every((weight) => weight !== null) ? optionWeights : null;
+}
+
+function normalizeDaoUserVoteCastStatus(value) {
+  const status = typeof value === 'string' ? value.trim() : '';
+  return Object.values(DAO_USER_VOTE_CAST_STATUSES).includes(status)
+    ? status
+    : DAO_USER_VOTE_CAST_STATUSES.SUBMITTED;
+}
+
+// A cast records one vote transaction the network accepted on submission.
+// Malformed casts are dropped without discarding the rest of the proposal entry.
+function normalizeDaoUserVoteCast(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const txid = normalizeDaoUserVoteCastTxid(value.txid);
+  const weights = normalizeDaoUserVoteCastWeights(value.weights);
+  const spend = parseDaoUnsignedBigInt(value.spend);
+  const timestamp = normalizeDaoTimestamp(value.timestamp);
+  if (!txid || !weights || !spend || spend <= 0n || !timestamp) return null;
+
+  return {
+    txid,
+    weights,
+    spend,
+    optionWeights: normalizeDaoUserVoteCastOptionWeights(value.optionWeights, weights.length),
+    timestamp,
+    status: normalizeDaoUserVoteCastStatus(value.status),
+  };
+}
+
+function normalizeDaoUserVoteCasts(value) {
+  if (!Array.isArray(value)) return [];
+
+  const casts = [];
+  const seenTxids = new Set();
+  for (const item of value) {
+    const cast = normalizeDaoUserVoteCast(item);
+    if (!cast || seenTxids.has(cast.txid)) continue;
+    seenTxids.add(cast.txid);
+    casts.push(cast);
+  }
+  return casts;
+}
+
 function normalizeDaoUserVotes(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
 
@@ -1709,6 +1773,9 @@ function normalizeDaoUserVotes(value) {
     if (claimStart && claimEnd >= claimStart) {
       Object.assign(normalizedEntry, { claimStart, claimEnd });
     }
+
+    const casts = normalizeDaoUserVoteCasts(entry.casts);
+    if (casts.length) normalizedEntry.casts = casts;
     normalized[proposalNumber] = normalizedEntry;
   }
   return normalized;
@@ -1834,10 +1901,37 @@ export function createDaoProposalVoteTracker({
     }
   }
 
+  // Called when the network accepts a vote submission. Whether the transaction
+  // was applied is not checked here; a later receipt check will update the cast.
+  function recordSubmittedVote({ proposalNumber, txid, weights, spend, timestamp }) {
+    const number = normalizeDaoPositiveInteger(proposalNumber);
+    const cast = normalizeDaoUserVoteCast({
+      txid,
+      weights,
+      spend,
+      optionWeights: null,
+      timestamp,
+      status: DAO_USER_VOTE_CAST_STATUSES.SUBMITTED,
+    });
+    if (!number || !cast) return false;
+
+    const current = readVotes();
+    const existingEntry = current[number] ?? {};
+    const existingCasts = normalizeDaoUserVoteCasts(existingEntry.casts);
+    if (existingCasts.some((existing) => existing.txid === cast.txid)) return false;
+
+    writeVotes({
+      ...current,
+      [number]: { ...existingEntry, casts: [...existingCasts, cast] },
+    });
+    return true;
+  }
+
   return Object.freeze({
     getPendingClaimProposalNumbers,
     getOpenClaimProposalNumbers,
     handleSettlement,
+    recordSubmittedVote,
     setAuthoritativeClaimWindow,
   });
 }
