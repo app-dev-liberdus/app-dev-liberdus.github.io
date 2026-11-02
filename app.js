@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'h'; // Also increment this when you increment version.html
+const version = 'i'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -16506,8 +16506,8 @@ function markConnectivityDependentElements() {
     '#openCallScheduleDateBtn',
     '#confirmDateTimePicker',
 
-    // Message context menu (disable all except 'Delete for me' and 'Copy' and 'Join')
-    '.message-context-menu .context-menu-option:not([data-action="delete"]):not([data-action="copy"]):not([data-action="join"]):not([data-action="location"])',
+    // Delete for all stays clickable so its handler can explain offline requirements.
+    '.message-context-menu .context-menu-option:not([data-action="delete"]):not([data-action="delete-for-all"]):not([data-action="copy"]):not([data-action="join"]):not([data-action="location"])',
 
     // bridgeModal
     '#bridgeForm button[type="submit"]',
@@ -21005,6 +21005,7 @@ class ChatModal {
    * @returns {void}
    */
   cancelAllOperations() {
+    fullImageModal.close();
     this.abortController.abort();
     this.abortController = new AbortController();
   }
@@ -25322,9 +25323,10 @@ class ChatModal {
    * @param {Object} item - message object from myData.contacts[address].messages[idx]
    * @param {HTMLElement} linkEl - element with data-* fields (attachment row or voice message element)
    * @param {string} [urlOverride] - optional URL to fetch instead of linkEl.dataset.url (used for pUrl thumbnails)
+   * @param {AbortSignal} [signal] - allows the media viewer to cancel its own download
    * @returns {Promise<Blob>}
    */
-  async decryptAttachmentToBlob(item, linkEl, urlOverride = null) {
+  async decryptAttachmentToBlob(item, linkEl, urlOverride = null, signal = this.abortController.signal) {
     if (!item || !linkEl) throw new Error('Missing item or attachment element');
 
     // Use urlOverride if provided, otherwise use the main attachment URL
@@ -25391,7 +25393,7 @@ class ChatModal {
     }
 
     // 2) Download encrypted bytes (use fetchUrl which may be pUrl or main url)
-    const res = await fetch(fetchUrl, { signal: this.abortController.signal });
+    const res = await fetch(fetchUrl, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const cipherBin = new Uint8Array(await res.arrayBuffer());
 
@@ -25457,17 +25459,13 @@ class ChatModal {
    * Gets the decrypted full image from IndexedDB, downloading it on a cache miss.
    * @param {Object} item - message containing the attachment metadata and keys
    * @param {HTMLElement} linkEl - rendered attachment row
-   * @param {() => void} [onDownloadStart] - called before downloading and decrypting
    * @returns {Promise<Blob>}
    */
-  async getFullImageBlob(item, linkEl, onDownloadStart) {
+  async getFullImageBlob(item, linkEl) {
     const attachment = this.getFullImageAttachment(item, linkEl);
     return fullImageCache.getOrCache({
       attachment,
-      downloadAndDecrypt: () => {
-        onDownloadStart?.();
-        return this.decryptAttachmentToBlob(item, linkEl);
-      },
+      downloadAndDecrypt: () => this.decryptAttachmentToBlob(item, linkEl),
       shouldCache: () => Array.isArray(item?.xattach)
         && item.xattach.some(candidate => candidate?.url === attachment.url),
     });
@@ -26338,20 +26336,56 @@ class ChatModal {
   }
 
   /**
-   * Returns whether "Delete for all" should be available for a given message element.
-   * Mirrors the gating used in the message context menu.
+   * Returns whether "Delete for all" applies to a message. Sending requirements
+   * are checked on tap so both context menus can explain why an action is blocked.
    * @param {HTMLElement} messageEl
    * @param {Object|null} messageRecord
    * @returns {boolean}
    */
   canDeleteMessageForAll(messageEl, messageRecord = null) {
     const isMine = !!messageEl?.classList?.contains('sent');
-    if (!isMine || !this.canSendWithZeroToll()) {
+    if (!isMine) return false;
+
+    const message = messageRecord || this.getMessageRecordFromElement(messageEl);
+    if (!message?.my || !message.txid || isDeletedForAll(message)) return false;
+
+    const status = message.status || messageEl.dataset.status;
+    return !status || status === 'sent';
+  }
+
+  /**
+   * Rechecks a delete request after asynchronous preparation, before it can send.
+   * @param {{account: Object, address: string, message: Object, txid: string}} request
+   * @returns {boolean}
+   */
+  checkDeleteForAllRequirements(request) {
+    const { account, address, message, txid } = request;
+    if (myAccount !== account || this.address !== address || message.txid !== txid) return false;
+
+    if (isDeletedForAll(message)) {
+      showToast('Message already deleted for everyone', 2000, 'info');
+      return false;
+    }
+    if (!message.my) {
+      showToast('You can only delete your own messages for all', 0, 'error');
+      return false;
+    }
+    if (message.status && message.status !== 'sent') {
+      showToast('Only sent messages can be deleted for everyone.', 0, 'error');
+      return false;
+    }
+    if (!isOnline) {
+      showToast('You’re offline. Reconnect to delete this message for everyone.', 0, 'error');
       return false;
     }
 
-    const message = messageRecord || this.getMessageRecordFromElement(messageEl);
-    if (message && isDeletedForAll(message)) {
+    const contact = myData.contacts[address];
+    if (!contact) return false;
+    if (!this.canSendWithZeroToll()) {
+      const reason = contact.tollRequiredToSend === 2
+        ? 'You are blocked by this user.'
+        : 'To delete for all, this person must add you as a connection or set their toll to zero.';
+      showToast(reason, 0, 'error');
       return false;
     }
 
@@ -26373,16 +26407,15 @@ class ChatModal {
     const existingGuard = this.recentDeleteForAllGuardsByTxid.get(targetTxid);
     clearTimeout(existingGuard?.timeoutId);
 
-    const guard = { targetTxid };
-    guard.timeoutId = setTimeout(() => {
-      if (this.recentDeleteForAllGuardsByTxid.get(targetTxid) !== guard) {
-        return;
-      }
-
-      this.recentDeleteForAllGuardsByTxid.delete(targetTxid);
-    }, DELETE_FOR_ALL_ACTION_GUARD_MS);
+    // Keep the reservation until preparation/submission finishes, even if slow.
+    const guard = { targetTxid, timeoutId: null };
     this.recentDeleteForAllGuardsByTxid.set(targetTxid, guard);
     return guard;
+  }
+
+  scheduleDeleteForAllGuardExpiry(guard) {
+    if (this.recentDeleteForAllGuardsByTxid.get(guard.targetTxid) !== guard) return;
+    guard.timeoutId = setTimeout(() => this.clearRecentDeleteForAllGuard(guard), DELETE_FOR_ALL_ACTION_GUARD_MS);
   }
 
   clearRecentDeleteForAllGuard(guard) {
@@ -26919,7 +26952,7 @@ class ChatModal {
 
   /**
    * Shows context menu for an attachment row.
-   * Images include an Open action; all attachment types include Save.
+   * Images and eligible videos include Open; all attachment types include Save.
    * @param {Event} e
    * @param {HTMLElement} attachmentRow
    */
@@ -26949,9 +26982,8 @@ class ChatModal {
       deleteForAllOption.style.display = canDeleteForAll ? 'flex' : 'none';
     }
 
-    const isImageAttachment = attachmentRow.dataset.imageAttachment === 'true';
     const openOption = this.imageAttachmentContextMenu.querySelector('[data-action="open"]');
-    if (openOption) openOption.style.display = isImageAttachment ? 'flex' : 'none';
+    if (openOption) openOption.style.display = this.getAttachmentPreviewKind(attachmentRow) ? 'flex' : 'none';
 
     // Show Import Contacts option for VCF files
     const importContactsOpt = this.imageAttachmentContextMenu.querySelector('[data-action="import-contacts"]');
@@ -26984,7 +27016,7 @@ class ChatModal {
         void this.openImportContactsModal(row);
         break;
       case 'open':
-        void this.openImageAttachment(row);
+        void this.openMediaAttachment(row);
         break;
       case 'save':
         void this.saveImageAttachment(row);
@@ -27046,36 +27078,57 @@ class ChatModal {
   }
 
   /**
-   * Opens an image attachment using the cache-first full-image flow.
+   * Classifies menu eligibility only; decrypted bytes are verified before display.
+   * @param {HTMLElement} attachmentRow
+   * @returns {'image' | 'video' | null}
+   */
+  getAttachmentPreviewKind(attachmentRow) {
+    if (attachmentRow.dataset.imageAttachment === 'true') return 'image';
+    const type = normalizeMimeType(attachmentRow.dataset.type);
+    return ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'].includes(type) ? 'video' : null;
+  }
+
+  /**
+   * Opens media promptly, preserving the full-image cache and downloading videos anew.
    * @param {HTMLElement} attachmentRow
    */
-  async openImageAttachment(attachmentRow) {
-    if (this.attachmentDownloadInProgress) return;
-    this.attachmentDownloadInProgress = true;
+  async openMediaAttachment(attachmentRow) {
+    const kind = this.getAttachmentPreviewKind(attachmentRow);
+    if (!kind) return;
 
-    let loadingToastId;
+    let requestId;
     try {
       const { item, url } = this.getAttachmentContextFromRow(attachmentRow);
       if (url === '#') return;
 
-      const filename = decodeURIComponent(attachmentRow.dataset.name || 'Image');
+      const filename = decodeURIComponent(attachmentRow.dataset.name || 'Attachment');
+      requestId = fullImageModal.openLoading(filename, kind, attachmentRow.dataset.thumbnailUrl || '');
+      if (requestId === null) return;
 
-      const blob = await this.getFullImageBlob(item, attachmentRow, () => {
-        loadingToastId = showToast('Opening image...', 0, 'loading');
-      });
-      if (loadingToastId) hideToast(loadingToastId);
-      loadingToastId = null;
+      const blob = kind === 'image'
+        ? await this.getFullImageBlob(item, attachmentRow)
+        : await this.decryptAttachmentToBlob(item, attachmentRow, null, fullImageModal.abortController.signal);
+      if (!fullImageModal.isCurrentRequest(requestId)) return;
       const safePreviewMime = await getSafeAttachmentPreviewMime(blob);
-      if (!safePreviewMime.startsWith('image/')) {
-        throw new Error('Attachment is not a verified previewable image');
+      if (!fullImageModal.isCurrentRequest(requestId)) return;
+      const isVerified = kind === 'image'
+        ? safePreviewMime.startsWith('image/')
+        : ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'].includes(safePreviewMime);
+      if (!isVerified) {
+        fullImageModal.showError('This attachment cannot be previewed safely.', requestId);
+        return;
       }
-      fullImageModal.open(new Blob([blob], { type: safePreviewMime }), filename);
+      const previewBlob = new Blob([blob], { type: safePreviewMime });
+      if (kind === 'video') {
+        fullImageModal.showVideo(previewBlob, requestId);
+      } else {
+        fullImageModal.showImage(previewBlob, requestId);
+      }
     } catch (err) {
-      console.error('Image open failed:', err);
-      this.handleAttachmentError(err, 'Failed to open image.');
-    } finally {
-      if (loadingToastId) hideToast(loadingToastId);
-      this.attachmentDownloadInProgress = false;
+      if (requestId !== undefined && !fullImageModal.isCurrentRequest(requestId)) return;
+      console.error('Media open failed:', err);
+      if (requestId !== undefined) fullImageModal.showError('Unable to load this attachment.', requestId);
+      this.handleAttachmentError(err, 'Failed to open attachment.');
     }
   }
 
@@ -27941,59 +27994,48 @@ class ChatModal {
     const { txid, messageTimestamp: timestamp } = messageEl.dataset;
     
     if (!timestamp && !txid) return;
-    
+
+    let deleteForAllGuard = null;
+    let submissionAttempted = false;
     try {
-      // Get the message object from contact.messages
-      const contact = myData.contacts[this.address];
+      const account = myAccount;
+      const address = this.address;
+      const contact = myData.contacts[address];
       if (!contact) return;
 
       const message = this.getMessageRecordFromElement(messageEl);
       if (!message) return;
 
-      const targetTxid = message.txid;
-      if (!targetTxid) {
+      const request = { account, address, message, txid: message.txid };
+      if (!request.txid) {
         return showToast('Cannot delete message: missing message id', 0, 'error');
       }
-      
-      if (isDeletedForAll(message)) {
-        return showToast('Message already deleted for everyone', 2000, 'info');
-      }
+      if (this.hasRecentDeleteForAllForTarget(request.txid)) return;
+      if (!this.checkDeleteForAllRequirements(request)) return;
 
-      // Check if the message was sent by the current user
-      if (!message.my) {
-        return showToast('You can only delete your own messages for all', 0, 'error');
-      }
-
-      if (this.hasRecentDeleteForAllForTarget(targetTxid)) return;
-
-      if (!confirm('Delete this message for all participants?')) return;
-      const deleteForAllGuard = this.markRecentDeleteForAllForTarget(targetTxid);
-
-      // Create and send a "delete" message
-      const keys = myAccount.keys;
+      const keys = account?.keys;
       if (!keys) {
-        this.clearRecentDeleteForAllGuard(deleteForAllGuard);
         showToast('Keys not found', 0, 'error');
         return;
       }
 
-      const tollInLib = contact.tollRequiredToSend == 0 ? 0n : getEffectiveTollLibWei(this.toll);
-
-      const sufficientBalance = await validateBalance(tollInLib);
-      if (!sufficientBalance) {
-        this.clearRecentDeleteForAllGuard(deleteForAllGuard);
-        const msg = `Insufficient balance for fee${tollInLib > 0n ? ' and toll' : ''}. Go to the wallet to add more LIB.`;
-        showToast(msg, 0, 'error');
+      deleteForAllGuard = this.markRecentDeleteForAllForTarget(request.txid);
+      const feeBalanceStatus = await getFeeBalanceStatus();
+      if (!this.checkDeleteForAllRequirements(request)) return;
+      if (!feeBalanceStatus.success) {
+        showFeeBalanceFailureToast(feeBalanceStatus.reason);
         return;
       }
 
+      if (!confirm('Delete this message for all participants?')) return;
+
       // Ensure recipient keys are available
-      const ok = await ensureContactKeys(this.address);
+      const ok = await ensureContactKeys(address);
+      if (!this.checkDeleteForAllRequirements(request)) return;
       const recipientPubKey = contact.public;
       const pqRecPubKey = contact.pqPublic;
       if (!ok || !recipientPubKey || !pqRecPubKey) {
-        this.clearRecentDeleteForAllGuard(deleteForAllGuard);
-        console.warn(`No public/PQ key found for recipient ${this.address}`);
+        console.warn(`No public/PQ key found for recipient ${address}`);
         showToast('Failed to get recipient key', 0, 'error');
         return;
       }
@@ -28004,7 +28046,7 @@ class ChatModal {
       // Create delete message payload
       const deleteObj = {
         type: 'delete',
-        txid: targetTxid  // ID of the message to delete
+        txid: request.txid  // ID of the message to delete
       };
 
       // Encrypt the message
@@ -28021,11 +28063,14 @@ class ChatModal {
       };
 
       // Prepare and send the delete message transaction
-      const deleteMessageObj = await this.createChatMessage(this.address, payload, tollInLib, keys);
+      const deleteMessageObj = await this.createChatMessage(address, payload, 0n, keys);
+      if (!this.checkDeleteForAllRequirements(request)) return;
       await signObj(deleteMessageObj, keys);
+      if (!this.checkDeleteForAllRequirements(request)) return;
       const deleteTxid = getTxid(deleteMessageObj);
 
       // Send the delete transaction
+      submissionAttempted = true;
       const response = await injectTx(deleteMessageObj, deleteTxid);
 
       if (!response || !response.result || !response.result.success) {
@@ -28050,6 +28095,11 @@ class ChatModal {
     } catch (error) {
       console.error('Delete for all error:', error);
       showToast('Failed to delete message. Please try again.', 0, 'error');
+    } finally {
+      if (deleteForAllGuard) {
+        if (submissionAttempted) this.scheduleDeleteForAllGuardExpiry(deleteForAllGuard);
+        else this.clearRecentDeleteForAllGuard(deleteForAllGuard);
+      }
     }
   }
 
@@ -29019,6 +29069,8 @@ const chatModal = new ChatModal();
 class FullImageModal {
   constructor() {
     this.objectUrl = null;
+    this.requestId = 0;
+    this.abortController = null;
     this.scale = 1;
     this.translateX = 0;
     this.translateY = 0;
@@ -29032,14 +29084,18 @@ class FullImageModal {
     this.title = document.getElementById('fullImageModalTitle');
     this.viewer = document.getElementById('fullImageViewer');
     this.loading = document.getElementById('fullImageLoading');
+    this.loadingText = document.getElementById('fullImageLoadingText');
+    this.error = document.getElementById('fullImageError');
     this.image = document.getElementById('fullImageViewerImage');
+    this.video = document.getElementById('fullImageViewerVideo');
     this.zoomControls = document.getElementById('fullImageZoomControls');
     this.zoomInButton = document.getElementById('fullImageZoomIn');
     this.zoomOutButton = document.getElementById('fullImageZoomOut');
 
-    assert(this.modal && this.closeButton && this.title && this.viewer && this.loading && this.image
+    assert(this.modal && this.closeButton && this.title && this.viewer && this.loading && this.loadingText
+      && this.error && this.image && this.video
       && this.zoomControls && this.zoomInButton && this.zoomOutButton,
-      'Full image modal elements are required');
+      'Media modal elements are required');
 
     this.closeButton.addEventListener('click', () => this.close());
     this.zoomInButton.addEventListener('click', () => this.zoomBy(0.5));
@@ -29060,35 +29116,71 @@ class FullImageModal {
     this.updateZoomControls();
   }
 
-  open(blob, filename = 'Image') {
-    assert(blob instanceof Blob, 'Full image modal requires a Blob');
-
+  /** @returns {number | null} Identifies this open until close or replacement. */
+  openLoading(filename, kind = 'image', poster = '') {
     const isAlreadyOpen = this.modal.classList.contains('active');
-    if (!isAlreadyOpen && !openModal(this.modal)) return false;
+    if (!isAlreadyOpen && !openModal(this.modal)) return null;
 
-    this.clearImage();
-
+    this.clearMedia();
+    const requestId = ++this.requestId;
+    this.abortController = new AbortController();
     this.title.textContent = filename;
     this.image.alt = filename;
+    this.modal.classList.toggle('is-video', kind === 'video');
+    this.loadingText.textContent = kind === 'video' ? 'Loading video...' : 'Loading image...';
     this.loading.hidden = false;
     this.viewer.setAttribute('aria-busy', 'true');
+    if (kind === 'video' && poster) {
+      this.video.poster = poster;
+      this.video.hidden = false;
+    }
+    return requestId;
+  }
 
+  isCurrentRequest(requestId) {
+    return this.requestId === requestId && this.modal.classList.contains('active');
+  }
+
+  showImage(blob, requestId) {
+    if (!this.isCurrentRequest(requestId)) return;
     const objectUrl = URL.createObjectURL(blob);
     this.objectUrl = objectUrl;
     this.image.onload = () => {
-      if (this.objectUrl !== objectUrl) return;
+      if (!this.isCurrentRequest(requestId) || this.objectUrl !== objectUrl) return;
       this.loading.hidden = true;
       this.image.hidden = false;
       this.viewer.setAttribute('aria-busy', 'false');
       this.updateZoomControls();
     };
     this.image.onerror = () => {
-      if (this.objectUrl !== objectUrl) return;
-      this.close();
-      showToast('Unable to display image.', 0, 'error');
+      this.showError('Unable to display image.', requestId);
     };
     this.image.src = objectUrl;
-    return true;
+  }
+
+  showVideo(blob, requestId) {
+    if (!this.isCurrentRequest(requestId)) return;
+
+    this.video.onloadedmetadata = () => {
+      if (!this.isCurrentRequest(requestId)) return;
+      this.loading.hidden = true;
+      this.viewer.setAttribute('aria-busy', 'false');
+    };
+    this.video.onerror = () => {
+      this.showError('Unable to play this video on this device.', requestId);
+    };
+    this.objectUrl = URL.createObjectURL(blob);
+    this.video.hidden = false;
+    this.video.src = this.objectUrl;
+    this.video.load();
+  }
+
+  showError(message, requestId) {
+    if (!this.isCurrentRequest(requestId)) return;
+    ++this.requestId;
+    this.clearMedia();
+    this.error.textContent = `${message} Close this viewer and choose Save from the attachment options.`;
+    this.error.hidden = false;
   }
 
   getTouchMidpoint(touches) {
@@ -29142,6 +29234,7 @@ class FullImageModal {
   }
 
   handleTouchMove(event) {
+    if (this.image.hidden) return;
     if (event.touches.length === 2) {
       event.preventDefault();
       if (this.touchGesture?.type !== 'pinch') this.startPinch(event.touches);
@@ -29163,6 +29256,7 @@ class FullImageModal {
   }
 
   handleTouchEnd(event) {
+    if (this.image.hidden) return;
     if (event.touches.length === 1 && this.scale > 1) {
       this.startPan(event.touches[0]);
     } else if (event.touches.length === 0) {
@@ -29251,18 +29345,27 @@ class FullImageModal {
     this.viewer?.classList.remove('is-zoomed', 'is-dragging');
   }
 
-  clearImage() {
+  clearMedia() {
+    this.abortController?.abort();
+    this.abortController = null;
     if (!this.image) return;
 
+    this.video.onloadedmetadata = null;
+    this.video.onerror = null;
+    this.video.pause();
+    this.video.removeAttribute('src');
+    this.video.removeAttribute('poster');
+    this.video.load();
+    this.video.hidden = true;
     this.resetTransform();
     this.image.onload = null;
     this.image.onerror = null;
     this.image.removeAttribute('src');
     this.image.hidden = true;
     this.loading.hidden = true;
+    this.error.hidden = true;
     this.viewer.setAttribute('aria-busy', 'false');
     this.image.alt = '';
-    this.title.textContent = 'Image';
     this.updateZoomControls();
 
     if (this.objectUrl) {
@@ -29272,8 +29375,10 @@ class FullImageModal {
   }
 
   close() {
+    ++this.requestId;
     this.modal?.classList.remove('active');
-    this.clearImage();
+    this.clearMedia();
+    if (this.title) this.title.textContent = 'Media';
   }
 }
 
