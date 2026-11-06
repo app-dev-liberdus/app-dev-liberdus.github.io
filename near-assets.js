@@ -11,6 +11,7 @@ import {
   hex2bin,
   utf82bin,
   BUTTON_COOLDOWN_MS,
+  WalletUsdValuation,
   escapeHtml,
   openModal,
   withButtonCooldown,
@@ -795,12 +796,8 @@ export function normalizeIntentsToken(token, rawBalance) {
   const rawAmount = toRawAmount(rawBalance);
   const tokenAmount = formatUnits(rawAmount, decimals);
 
-  // Number(null) is 0, so an absent price has to be rejected before coercion --
-  // otherwise an unpriced asset reads as "worth $0.00" rather than "unknown".
-  const rawPrice = token?.price;
-  const price = Number(rawPrice);
-  const hasPrice = rawPrice !== null && rawPrice !== undefined && rawPrice !== ''
-    && Number.isFinite(price) && price >= 0;
+  const price = WalletUsdValuation.fromValue(token?.price).total;
+  const hasPrice = price !== null;
   const tokenPriceUsd = hasPrice ? String(price) : null;
   const tokenValueUsd = hasPrice ? String(Number(tokenAmount) * price) : null;
 
@@ -992,6 +989,15 @@ export class IntentsDiscoveryService {
   getTotalUsd() {
     const total = Number(this.network.totalValueUsd);
     return Number.isFinite(total) ? total : 0;
+  }
+
+  /** Valuation follows the retained holdings, independently of refresh status. */
+  getUsdValuation() {
+    if (this.balances === null) return WalletUsdValuation.fromValue(null);
+    return new WalletUsdValuation(this.network.assets.map((asset) => ({
+      held: asset.rawAmount !== '0',
+      usdValue: asset.tokenValueUsd,
+    })));
   }
 
   activateAccount(accountId) {
@@ -1746,7 +1752,8 @@ export class IntentsTransferService {
       assetId: asset.assetId,
       symbol: asset.tokenSymbol,
       chainName: asset.chainName,
-      amount: String(amount).trim(),
+      // Receipts need a plain decimal even when the input is ".5" or "2.".
+      amount: formatUnits(rawAmount, asset.tokenDecimals),
       rawAmount: rawAmount.toString(),
       memo: memo ? String(memo) : null,
       payload: buildIntentPayload({
@@ -2675,7 +2682,7 @@ export class IntentsChatError extends Error {
  * recipient could derive for themselves is not worth trusting a peer for.
  */
 export function buildTransferMessage({
-  assetId, symbol, chainName, amount, decimals, intentHash, transactionHash = null, note = null,
+  assetId, symbol, chainName, amount, decimals, intentHash, transactionHash = null, note = null, initiatedAt = null,
 }) {
   const message = {
     type: INTENTS_CHAT_MESSAGE_TYPE,
@@ -2690,6 +2697,7 @@ export function buildTransferMessage({
   // long as the chat keeps the message. Absent when settlement was not seen.
   if (transactionHash) message.transactionHash = transactionHash;
   if (note) message.note = String(note).slice(0, 140);
+  if (initiatedAt !== null) message.initiatedAt = initiatedAt;
   return message;
 }
 
@@ -2728,6 +2736,7 @@ export function parseTransferMessage(raw) {
     && /^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(raw.transactionHash.trim())
     ? raw.transactionHash.trim()
     : null;
+  const initiatedAt = Number.isSafeInteger(raw.initiatedAt) && raw.initiatedAt > 0 ? raw.initiatedAt : null;
 
   return Object.freeze({
     type: INTENTS_CHAT_MESSAGE_TYPE,
@@ -2738,6 +2747,7 @@ export function parseTransferMessage(raw) {
     decimals,
     intentHash,
     transactionHash,
+    initiatedAt,
     note: note || null,
   });
 }
@@ -2786,15 +2796,14 @@ export const RELAY_MEMORY_MS = 6 * 60 * 60 * 1000;
  *
  * `expectedFrom` / `expectedTo` are the intents accounts of the chat's two
  * sides. States: settled (checked and matching), failed (checked and not),
- * pending, expired (too old for the relay and never checked while it knew),
- * unverifiable (nothing could be asked -- not evidence either way).
+ * pending, expired (too old to check), unknown (relay miss without a usable
+ * payment time), unverifiable (the check could not be completed).
  */
 export async function verifyTransferClaim(claim, {
   getStatus = getIntentStatus,
   getTransfers = fetchIntentTransfers,
   expectedFrom = null,
   expectedTo = null,
-  sentAt = null,
   now = Date.now(),
 } = {}) {
   if (!claim?.intentHash) return { state: 'unverifiable', reason: 'No intent hash' };
@@ -2808,12 +2817,18 @@ export async function verifyTransferClaim(claim, {
       return { state: 'unverifiable', reason: error.message || String(error) };
     }
     if (INTENT_IN_FLIGHT.includes(status.status)) return { state: 'pending', transactionHash: null };
-    if (status.status !== 'SETTLED') {
-      // Unknown to the relay: damning for a fresh claim, which a genuine
-      // payment never is, but only forgetfulness for an old one.
-      if (status.status === 'NOT_FOUND_OR_NOT_VALID' && Number(sentAt) > 0 && now - Number(sentAt) > RELAY_MEMORY_MS) {
+    if (status.status === 'NOT_FOUND_OR_NOT_VALID') {
+      // The receipt can be retried, so only the original payment time can
+      // help interpret a relay miss. This time is supplied by the sender.
+      const { initiatedAt } = claim;
+      if (!Number.isSafeInteger(initiatedAt) || initiatedAt <= 0 || initiatedAt > now) {
+        return { state: 'unknown', reason: status.status };
+      }
+      if (now - initiatedAt > RELAY_MEMORY_MS) {
         return { state: 'expired', reason: status.status };
       }
+    }
+    if (status.status !== 'SETTLED') {
       return { state: 'failed', reason: status.status };
     }
     transactionHash = status.transactionHash;
@@ -2848,6 +2863,7 @@ export function paymentStatusLabel(state) {
     // Too old for the relay to remember, and never checked while it did.
     // Neither a verdict nor a problem to fix.
     expired: 'Too old to check',
+    unknown: 'Unable to confirm',
     unverifiable: 'Could not check yet',
     unchecked: 'Checking…',
   }[state] || 'Could not check yet';
@@ -2902,6 +2918,7 @@ export class IntentsChatPayments {
       );
     }
 
+    const initiatedAt = Date.now();
     const intentHash = await publishIntent(signed);
 
     // Wait for it to land before announcing it: the receipt then names the
@@ -2934,6 +2951,7 @@ export class IntentsChatPayments {
         decimals: asset?.tokenDecimals ?? null,
         intentHash,
         transactionHash,
+        initiatedAt,
         note,
       }),
     };
@@ -3040,6 +3058,13 @@ export function depositEntry(record, bridgeTokens = []) {
   };
 }
 
+const PAYMENT_ACTIVITY_STATUS = new Map([
+  ['settled', 'done'],
+  ['failed', 'unconfirmed'],
+  ['expired', 'expired'],
+  ['unknown', 'unknown'],
+]);
+
 /**
  * A chat payment, as a row. Our own sends are settled by definition -- we
  * published them. A received one is a claim until the intent is checked.
@@ -3055,14 +3080,13 @@ export function paymentEntry(payment) {
     amount: String(payment.amount),
     direction: mine ? -1 : 1,
     time: Number(payment.time) || 0,
-    status: mine || payment.verified === 'settled' ? 'done'
-      : payment.verified === 'failed' ? 'unconfirmed'
-        : payment.verified === 'expired' ? 'expired' : 'checking',
+    status: mine ? 'done' : PAYMENT_ACTIVITY_STATUS.get(payment.verified) ?? 'checking',
     intentHash: payment.intentHash,
     // What the check compares against the verifier's record of the transfer.
     claim: {
       intentHash: payment.intentHash,
       transactionHash: payment.transactionHash || null,
+      initiatedAt: payment.initiatedAt ?? null,
       assetId: payment.assetId,
       amount: String(payment.amount),
       decimals: payment.decimals ?? null,
@@ -3272,13 +3296,10 @@ export class IntentsActivity {
     if (known) return known;
     try {
       const result = await this.verifyClaim(entry.claim || { intentHash }, {
-        sentAt: entry.time,
         expectedFrom: entry.peerAccount,
         expectedTo: accountId,
       });
-      const status = result?.state === 'settled' ? 'done'
-        : result?.state === 'failed' ? 'unconfirmed'
-          : result?.state === 'expired' ? 'expired' : 'checking';
+      const status = PAYMENT_ACTIVITY_STATUS.get(result?.state) ?? 'checking';
       if (status !== 'checking') this.claims.set(intentHash, status);
       return status;
     } catch {
@@ -3307,11 +3328,10 @@ export const intentsActivity = new IntentsActivity();
 // (a chevron is an expand/collapse glyph), and no protocol nouns in product
 // copy -- what the verifier is called belongs in the code, not on the screen.
 
-// What a new account is offered first: the largest coins, each on the one
-// network its chip names. Six, so they sit in two even rows of three.
+// Starter assets for a new account, each labeled with its chain.
 //
-// USDT is the one that exists on many chains, so its chip -- like every
-// chip -- carries its network, and its receive screen says the same: USDT on
+// USDT exists on many chains, so each row carries its network, and its
+// receive screen says the same: USDT on
 // Tron sent to this address is lost.
 //
 // The same coins head the token picker's Popular section, with a few more:
@@ -3327,7 +3347,7 @@ const POPULAR = Object.freeze([
   'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near', // USDC on Ethereum
   'nep141:zec.omft.near',
 ]);
-const QUICK_RECEIVE = POPULAR.slice(0, 6);
+const STARTER_ASSETS = POPULAR.slice(0, 6);
 
 // Where a deposit to an asset's address is actually credited, when that is
 // not the asset itself. Bitcoin sent to the btc:mainnet address lands as nBTC
@@ -3346,10 +3366,6 @@ function receivingKey(assetKey) {
 /** Superseded for receiving, and a duplicate "BTC · Bitcoin" row anywhere
  *  else it is not already held. */
 const isSuperseded = (asset) => Boolean(DEPOSIT_CREDITS[asset.assetId]) && asset.rawAmount === '0';
-
-// The hero total: thousands separated, always two decimals. formatUsd has
-// neither separator nor grouping, and "$12345.67" is hard to read at 44px.
-const heroUsd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
 // A skeleton row stands in for an asset while the first balances load. Three
 // is enough to read as "a list is coming" without promising how long it is.
@@ -3449,11 +3465,6 @@ export function checkAmount(asset, value) {
   if (raw <= 0n) return '';
   if (raw > BigInt(asset.rawAmount)) return `That is more than your ${asset.tokenSymbol} balance.`;
   return null;
-}
-
-/** No balances read, or balances with no prices: either way, no dollar total. */
-function totalIsUnknown(status, network) {
-  return status === 'unpriced' || (status === 'unavailable' && network.assets.length === 0);
 }
 
 export const priceOf = (asset) => {
@@ -3655,15 +3666,11 @@ class MultichainModal {
   load() {
     this.modal = document.getElementById('multichainModal');
     this.totalBalance = document.getElementById('multichainTotalBalance');
+    this.priceStatus = document.getElementById('multichainPriceStatus');
     this.caption = document.getElementById('multichainHeroCaption');
     this.refreshButton = document.getElementById('refreshMultichainBalance');
     this.assetsList = document.getElementById('multichainAssetsList');
     this.statusLine = document.getElementById('multichainStatus');
-    this.receiveButton = document.getElementById('multichainReceiveAny');
-    this.receiveButton.addEventListener('click', () => this.controller.startDeposit());
-    this.sendButton = document.getElementById('multichainSendAny');
-    // No asset chosen: the send screen starts on the largest holding.
-    this.sendButton.addEventListener('click', () => this.controller.onSend(null));
     this.listHead = document.getElementById('multichainListHead');
     this.hideEmpty = document.getElementById('multichainHideEmpty');
     this.hideEmpty.addEventListener('change', () => {
@@ -3671,11 +3678,8 @@ class MultichainModal {
       this.render();
     });
     this.empty = document.getElementById('multichainEmpty');
-    this.quick = document.getElementById('multichainQuick');
-    this.quick.addEventListener('click', (event) => {
-      const chip = event.target.closest('[data-asset-key]');
-      if (chip) this.controller.receiveModal.open(chip.dataset.assetKey);
-    });
+    document.getElementById('multichainDepositAnother')
+      .addEventListener('click', () => this.controller.startDeposit());
 
     document.getElementById('closeMultichainModal')
       .addEventListener('click', () => this.close());
@@ -3734,18 +3738,27 @@ class MultichainModal {
     this.refreshButton.setAttribute('aria-busy', String(on));
   }
 
+  reset() {
+    if (!this.totalBalance) return;
+    this.totalBalance.textContent = '$ -';
+    this.totalBalance.style.color = '';
+    this.totalBalance.removeAttribute('aria-label');
+    this.priceStatus.textContent = '';
+    this.statusLine.textContent = '';
+  }
+
   renderLoading() {
+    this.totalBalance.style.color = '';
     this.totalBalance.innerHTML = '<span class="multichain-skeleton is-figure" aria-hidden="true"></span>';
     this.totalBalance.setAttribute('aria-label', 'Loading balance');
     this.caption.innerHTML = '<span class="multichain-skeleton is-caption" aria-hidden="true"></span>';
+    this.priceStatus.textContent = '';
     this.statusLine.textContent = '';
     this.listHead.hidden = true;
     this.empty.hidden = true;
     this.assetsList.hidden = false;
     this.assetsList.setAttribute('aria-busy', 'true');
     this.assetsList.innerHTML = SKELETON_ROW.repeat(3);
-    // Nothing is known to be held yet.
-    this.sendButton.disabled = true;
   }
 
   render() {
@@ -3755,12 +3768,11 @@ class MultichainModal {
 
     this.totalBalance.removeAttribute('aria-label');
     this.assetsList.removeAttribute('aria-busy');
-    // Nothing read is not the same as nothing held: $0.00 would claim a
-    // balance. Nor is a balance with no prices worth $0.00.
-    const total = Number(network.totalValueUsd);
-    this.totalBalance.textContent = totalIsUnknown(status, network)
-      ? '—'
-      : heroUsd.format(Number.isFinite(total) ? total : 0);
+    const valuation = intentsAssets.getUsdValuation();
+    this.totalBalance.textContent = valuation.valueText;
+    this.totalBalance.style.color = valuation.state === 'none' && !['idle', 'loading'].includes(status)
+      ? 'var(--danger-color)' : '';
+    this.priceStatus.textContent = intentsAssets.balances === null ? '' : valuation.caption;
     // Says where the money actually is, which a bare total does not. Silent
     // when nothing is held: the empty balance already says it.
     const chains = [...new Set(held.map((asset) => asset.chainName))];
@@ -3769,24 +3781,16 @@ class MultichainModal {
       : chains.length === 1 ? `On ${chains[0]}` : '';
     // Only a problem earns this line (DESIGN.md §1.2); custody is a standing
     // fact, and lives in the footnote under the list.
-    this.statusLine.textContent = {
-      unavailable: 'Balances are unavailable right now. Refresh to try again.',
-      unpriced: 'Prices are unavailable right now. Your balances are up to date.',
-    }[status] || '';
-    this.sendButton.disabled = held.length === 0;
+    this.statusLine.textContent = status === 'unavailable'
+      ? 'Balances are unavailable right now. Refresh to try again.' : '';
 
-    // The list is what you hold, plus what you held before and spent to zero.
-    // "Hide empty" drops those; the switch only appears when there are any.
+    const assets = this.listAssets();
     const { hideEmpty } = this.controller.settings();
-    const zeros = network.assets.filter((asset) => asset.rawAmount === '0');
-    const visible = hideEmpty ? held : network.assets;
-    this.listHead.hidden = zeros.length === 0;
+    const visible = hideEmpty ? assets.filter((asset) => asset.rawAmount !== '0') : assets;
+    this.listHead.hidden = !assets.some((asset) => asset.rawAmount === '0');
     this.hideEmpty.checked = hideEmpty;
-
-    // Nothing held: the way to start, not a list of zeros. Only when the
-    // balances were actually read -- "nothing here" is a claim.
-    this.empty.hidden = !(['connected', 'unpriced'].includes(status) && held.length === 0 && visible.length === 0);
-    if (!this.empty.hidden) this.renderQuickReceive();
+    this.empty.hidden = visible.length !== 0;
+    this.empty.textContent = hideEmpty ? 'No assets to show. Turn off Hide empty to see all assets.' : 'No assets to show.';
 
     this.assetsList.hidden = visible.length === 0;
     if (visible.length === 0) {
@@ -3794,10 +3798,14 @@ class MultichainModal {
       return;
     }
 
-    this.assetsList.innerHTML = visible.map((asset) => `
+    const balancesKnown = intentsAssets.balances !== null;
+    this.assetsList.innerHTML = visible.map((asset) => {
+      const valuation = WalletUsdValuation.fromValue(balancesKnown ? (asset.rawAmount === '0' ? 0 : asset.tokenValueUsd) : null);
+      const amount = balancesKnown ? `${formatDisplayAmount(asset.tokenAmount)} ${asset.tokenSymbol}` : '—';
+      return `
       <button
         type="button"
-        class="multichain-row multichain-asset-button${asset.rawAmount === '0' ? ' is-empty' : ''}"
+        class="multichain-row multichain-asset-button"
         data-asset-key="${escapeHtml(asset.key)}"
         aria-label="${escapeHtml(assetTitle(asset))}"
       >
@@ -3806,28 +3814,25 @@ class MultichainModal {
           <span class="multichain-row-name">${escapeHtml(asset.tokenSymbol)}</span>
           <span class="multichain-row-chain">${escapeHtml(asset.chainName)}</span>
         </span>
-        <span class="multichain-row-values">
-          <span class="multichain-row-amount">${escapeHtml(formatDisplayAmount(asset.tokenAmount))}</span>
-          <span class="multichain-row-usd">${escapeHtml(
-            asset.tokenValueUsd === null ? 'Unpriced' : formatUsd(asset.tokenValueUsd),
-          )}</span>
+        <span class="multichain-row-values wallet-value-stack">
+          <span class="multichain-row-amount">${escapeHtml(amount)}</span>
+          <span class="multichain-row-usd"${valuation.state === 'none' ? ' style="color: var(--danger-color)"' : ''}>${escapeHtml(valuation.valueText)}</span>
+          ${valuation.caption ? `<span class="wallet-price-status">${escapeHtml(valuation.caption)}</span>` : ''}
         </span>
       </button>
-    `).join('');
+    `;
+    }).join('');
   }
 
-  /** The coins a new account is offered first, each one tap from its address. */
-  renderQuickReceive() {
-    const assets = QUICK_RECEIVE
-      .map((assetId) => intentsAssets.getCatalogAsset(`intents:${assetId}`))
-      .filter(Boolean);
-    this.quick.innerHTML = assets.map((asset) => `
-      <button type="button" class="multichain-quick-chip" data-asset-key="${escapeHtml(asset.key)}"
-        aria-label="Receive ${escapeHtml(assetTitle(asset))}">
-        ${assetMark(asset, 32)}
-        <span class="multichain-quick-symbol">${escapeHtml(asset.tokenSymbol)}</span>
-        <span class="multichain-quick-network">${escapeHtml(asset.chainName)}</span>
-      </button>`).join('');
+  /** Nonzero balances and starter rows, without changing portfolio history. */
+  listAssets() {
+    const assets = new Map(intentsAssets.getAssets()
+      .filter((asset) => asset.rawAmount !== '0')
+      .map((asset) => [asset.key, asset]));
+    for (const asset of intentsAssets.listCatalogAssets()) {
+      if (STARTER_ASSETS.includes(asset.assetId) && !assets.has(asset.key)) assets.set(asset.key, asset);
+    }
+    return [...assets.values()];
   }
 }
 
@@ -3843,6 +3848,7 @@ const ACTIVITY_STATUS = {
   refunded: 'Refunded',
   unconfirmed: 'Not confirmed',
   expired: 'Too old to check',
+  unknown: 'Unable to confirm',
 };
 
 const dayFormat = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
@@ -3875,6 +3881,7 @@ class MultichainAssetModal {
     this.icon = document.getElementById('multichainAssetIcon');
     this.amount = document.getElementById('multichainAssetAmount');
     this.value = document.getElementById('multichainAssetValue');
+    this.depositButton = document.getElementById('multichainAssetDeposit');
     this.receiveButton = document.getElementById('multichainAssetReceive');
     this.sendButton = document.getElementById('multichainAssetSend');
     this.withdrawButton = document.getElementById('multichainAssetWithdraw');
@@ -3887,14 +3894,15 @@ class MultichainAssetModal {
 
     document.getElementById('closeMultichainAssetModal')
       .addEventListener('click', () => this.close());
-    this.receiveButton.addEventListener('click', () => this.controller.receiveModal.open(this.assetKey));
+    this.depositButton.addEventListener('click', () => this.controller.receiveModal.open(this.assetKey));
+    this.receiveButton.addEventListener('click', () => this.controller.requestModal.open(this.assetKey));
     this.sendButton.addEventListener('click', () => this.controller.onSend(this.assetKey));
     this.withdrawButton.addEventListener('click', () => this.controller.withdrawModal.open(this.assetKey));
     this.swapButton.addEventListener('click', () => this.controller.swapModal.open(this.assetKey));
   }
 
   open(assetKey) {
-    const asset = intentsAssets.getAsset(assetKey);
+    const asset = intentsAssets.getCatalogAsset(assetKey);
     if (!asset) return;
     this.assetKey = assetKey;
     this.render();
@@ -3907,7 +3915,7 @@ class MultichainAssetModal {
    * the same asset keeps what is on screen until the new answer lands.
    */
   async loadActivity() {
-    const asset = intentsAssets.getAsset(this.assetKey);
+    const asset = intentsAssets.getCatalogAsset(this.assetKey);
     if (!asset) return;
     const seq = ++this.activitySeq;
     if (this.activityKey !== this.assetKey) {
@@ -3972,13 +3980,14 @@ class MultichainAssetModal {
   }
 
   render() {
-    const asset = intentsAssets.getAsset(this.assetKey);
+    const asset = intentsAssets.getCatalogAsset(this.assetKey);
     if (!asset) return;
     // The title carries symbol and chain, so the body never repeats them.
     this.title.textContent = assetTitle(asset);
     this.icon.innerHTML = assetMark(asset, 64);
-    this.amount.textContent = `${formatDisplayAmount(asset.tokenAmount)} ${asset.tokenSymbol}`;
-    this.value.textContent = asset.tokenValueUsd === null
+    const balancesKnown = intentsAssets.balances !== null;
+    this.amount.textContent = balancesKnown ? `${formatDisplayAmount(asset.tokenAmount)} ${asset.tokenSymbol}` : '—';
+    this.value.textContent = !balancesKnown ? '$ -' : asset.tokenValueUsd === null
       ? 'No price available'
       : formatUsd(asset.tokenValueUsd);
     // Nothing to send is not a state worth offering a form for.
@@ -3998,8 +4007,149 @@ class MultichainAssetModal {
   }
 }
 
+/** A request for a transfer between NEAR Intents accounts, not a deposit. */
+class MultichainRequestModal {
+  constructor(controller) {
+    this.controller = controller;
+    this.session = null;
+  }
+
+  load() {
+    this.modal = document.getElementById('multichainRequestModal');
+    this.title = document.getElementById('multichainRequestTitle');
+    this.addressDisplay = document.getElementById('multichainRequestAddress');
+    this.usernameDisplay = document.getElementById('multichainRequestUsername');
+    this.addressButton = document.getElementById('copyMultichainRequestAddress');
+    this.usernameButton = document.getElementById('copyMultichainRequestUsername');
+    this.qrcodeContainer = document.getElementById('multichainRequestQr');
+    this.status = document.getElementById('multichainRequestStatus');
+    this.amountInput = document.getElementById('multichainRequestAmount');
+    this.memoInput = document.getElementById('multichainRequestMemo');
+    this.symbol = document.getElementById('multichainRequestSymbol');
+
+    document.getElementById('closeMultichainRequestModal').addEventListener('click', () => this.close());
+    this.addressButton.addEventListener('click', () => this.copyValue('address'));
+    this.usernameButton.addEventListener('click', () => this.copyValue('username'));
+    this.amountInput.addEventListener('input', () => this.updateQRCode());
+    this.memoInput.addEventListener('input', () => this.updateQRCode());
+    window.addEventListener('resize', () => this.sizeQRCode());
+  }
+
+  open(assetKey) {
+    if (this.isActive()) return false;
+    const asset = intentsAssets.getCatalogAsset(assetKey);
+    const account = this.controller.getAccount();
+    const address = intentsAccountIdForAddress(account?.keys?.address);
+    if (!asset || !address || !account.username) return false;
+
+    this.close();
+    this.session = { account, address, username: account.username, asset };
+    this.title.textContent = `Receive ${assetTitle(asset)}`;
+    this.addressDisplay.textContent = address;
+    this.usernameDisplay.textContent = account.username;
+    this.symbol.textContent = asset.tokenSymbol;
+    this.updateQRCode();
+    if (!openModal(this.modal)) {
+      this.close();
+      return false;
+    }
+    return true;
+  }
+
+  isCurrentSession(session) {
+    return Boolean(session && this.session === session && this.controller.getAccount() === session.account);
+  }
+
+  createQRPaymentData() {
+    const session = this.session;
+    if (!this.isCurrentSession(session)) throw new Error('This payment request is no longer active.');
+    const { asset, address, username } = session;
+    const data = { t: 'intents', address, u: username, i: asset.assetId, s: asset.tokenSymbol };
+    const amount = this.amountInput.value.trim();
+    if (amount) {
+      parseTokenAmount(amount, asset.tokenDecimals);
+      data.a = amount;
+    }
+    const memo = this.memoInput.value.trim();
+    if (memo.length > 140) throw new Error('Memo must be 140 characters or fewer.');
+    if (memo) data.m = memo;
+    return data;
+  }
+
+  updateQRCode() {
+    if (!this.isCurrentSession(this.session)) {
+      this.close();
+      return;
+    }
+    this.qrcodeContainer.replaceChildren();
+    this.status.textContent = '';
+    try {
+      const data = this.createQRPaymentData();
+      const text = `liberdus://${bin2base64(utf82bin(JSON.stringify(data)))}`;
+      const bytes = globalThis.qr.encodeQR(text, 'gif', { scale: 4, border: 4 });
+      const img = document.createElement('img');
+      img.addEventListener('load', () => this.sizeQRCode());
+      img.src = `data:image/gif;base64,${bin2base64(bytes)}`;
+      img.alt = 'NEAR Intents payment request QR code';
+      this.qrcodeContainer.appendChild(img);
+    } catch (error) {
+      this.status.textContent = error.message || 'Could not generate the payment request QR code.';
+    }
+  }
+
+  sizeQRCode() {
+    const img = this.qrcodeContainer.firstElementChild;
+    if (!img?.naturalWidth) return;
+    // The encoder uses four pixels per module. Keep visible modules at an
+    // integer scale too, so long requests remain readable on narrow screens.
+    const modules = img.naturalWidth / 4;
+    const scale = Math.max(1, Math.min(4, Math.floor(this.qrcodeContainer.clientWidth / modules)));
+    img.width = modules * scale;
+    img.height = modules * scale;
+  }
+
+  async copyValue(field) {
+    const session = this.session;
+    if (!this.isCurrentSession(session)) return;
+    try {
+      await navigator.clipboard.writeText(session[field]);
+      if (!this.isCurrentSession(session)) return;
+      const button = field === 'address' ? this.addressButton : this.usernameButton;
+      button.classList.add('success');
+      const feedback = `${field === 'address' ? 'Address' : 'Username'} copied to clipboard`;
+      this.status.textContent = feedback;
+      clearTimeout(this.copyTimer);
+      this.copyTimer = setTimeout(() => {
+        this.addressButton.classList.remove('success');
+        this.usernameButton.classList.remove('success');
+        if (this.status.textContent === feedback) this.status.textContent = '';
+      }, 2000);
+    } catch {
+      if (this.isCurrentSession(session)) this.status.textContent = `Could not copy ${field}.`;
+    }
+  }
+
+  close() {
+    this.session = null;
+    clearTimeout(this.copyTimer);
+    this.modal?.classList.remove('active');
+    this.addressButton?.classList.remove('success');
+    this.usernameButton?.classList.remove('success');
+    if (this.addressDisplay) this.addressDisplay.textContent = '';
+    if (this.usernameDisplay) this.usernameDisplay.textContent = '';
+    if (this.qrcodeContainer) this.qrcodeContainer.replaceChildren();
+    if (this.amountInput) this.amountInput.value = '';
+    if (this.memoInput) this.memoInput.value = '';
+    if (this.status) this.status.textContent = '';
+  }
+
+  isActive() {
+    return this.modal?.classList.contains('active') || false;
+  }
+}
+
 /**
- * Receive: the deposit address is the whole screen.
+ * Deposit: the deposit address is the whole screen.
  *
  * Watches the balance while it is open, because a deposit lands a minute or
  * two after it is sent and a screen that never updates reads as broken.
@@ -4031,7 +4181,7 @@ class MultichainReceiveModal {
     if (!asset || !accountId) return;
 
     this.assetKey = assetKey;
-    this.title.textContent = `Receive ${assetTitle(asset)}`;
+    this.title.textContent = `Deposit ${assetTitle(asset)}`;
     this.body.innerHTML = '<div class="multichain-quote-working">Getting your deposit address…</div>';
     this.stopWatching();
     openModal(this.modal);
@@ -4917,6 +5067,7 @@ class MultichainTokenPicker {
    *  empty rather than repeating "0" down the list. */
   row(asset) {
     const held = asset.rawAmount !== '0';
+    const valuation = WalletUsdValuation.fromValue(held ? asset.tokenValueUsd : 0);
     return `
       <button type="button" class="multichain-row" data-asset-key="${escapeHtml(asset.key)}"
         aria-label="${escapeHtml(assetTitle(asset))}">
@@ -4925,11 +5076,10 @@ class MultichainTokenPicker {
           <span class="multichain-row-name">${escapeHtml(asset.tokenSymbol)}</span>
           <span class="multichain-row-chain">${escapeHtml(asset.chainName)}</span>
         </span>
-        ${held ? `<span class="multichain-row-values">
+        ${held ? `<span class="multichain-row-values wallet-value-stack">
           <span class="multichain-row-amount">${escapeHtml(formatDisplayAmount(asset.tokenAmount))}</span>
-          <span class="multichain-row-usd">${escapeHtml(
-            asset.tokenValueUsd === null ? 'Unpriced' : formatUsd(asset.tokenValueUsd),
-          )}</span>
+          <span class="multichain-row-usd"${valuation.state === 'none' ? ' style="color: var(--danger-color)"' : ''}>${escapeHtml(valuation.valueText)}</span>
+          ${valuation.caption ? `<span class="wallet-price-status">${escapeHtml(valuation.caption)}</span>` : ''}
         </span>` : ''}
       </button>`;
   }
@@ -5274,6 +5424,7 @@ class MultichainController {
     this.assetsModal = new MultichainModal(this);
     this.assetModal = new MultichainAssetModal(this);
     this.receiveModal = new MultichainReceiveModal(this);
+    this.requestModal = new MultichainRequestModal(this);
     this.withdrawModal = new MultichainWithdrawModal(this);
     this.swapModal = new MultichainSwapModal(this);
     this.tokenPicker = new MultichainTokenPicker(this);
@@ -5328,6 +5479,7 @@ class MultichainController {
     this.assetsModal.load();
     this.assetModal.load();
     this.receiveModal.load();
+    this.requestModal.load();
     this.withdrawModal.load();
     this.swapModal.load();
     this.tokenPicker.load();
@@ -5335,6 +5487,7 @@ class MultichainController {
 
     this.summaryButton = document.getElementById('multichainSummary');
     this.summaryValue = document.getElementById('multichainSummaryValue');
+    this.summaryStatus = document.getElementById('multichainSummaryStatus');
 
     document.getElementById('openMultichain')
       .addEventListener('click', () => this.assetsModal.open());
@@ -5346,7 +5499,15 @@ class MultichainController {
   reset() {
     intentsAssets.reset();
     intentsDeposits.reset();
-    if (this.summaryValue) this.summaryValue.textContent = '$0.00';
+    this.assetsModal.reset();
+    this.requestModal.close();
+    if (this.summaryValue) {
+      this.summaryValue.textContent = '$ -';
+      this.summaryValue.style.color = '';
+    }
+    if (this.summaryStatus) {
+      this.summaryStatus.textContent = '';
+    }
   }
 
   close(modalId) {
@@ -5354,6 +5515,7 @@ class MultichainController {
       multichainModal: this.assetsModal,
       multichainAssetModal: this.assetModal,
       multichainReceiveModal: this.receiveModal,
+      multichainRequestModal: this.requestModal,
       multichainWithdrawModal: this.withdrawModal,
       multichainSwapModal: this.swapModal,
       multichainTokenPickerModal: this.tokenPicker,
@@ -5369,26 +5531,22 @@ class MultichainController {
   }
 
   /**
-   * Receive anything the bridge carries. The listed assets are only what is
-   * held plus two defaults, so without this every other chain was unreachable.
+   * Deposit anything the bridge carries, including assets outside the
+   * holdings and starter rows shown on the asset screen.
    *
    * The picker's rows are asset-on-chain, so one tap answers both "which
    * token" and "which network" -- no separate network question.
    */
   async startDeposit() {
-    const button = this.assetsModal.receiveButton;
-    button.disabled = true;
     try {
       await intentsDeposits.loadBridgeTokens();
     } catch (error) {
       console.warn('Deposit options unavailable:', error);
       this.assetsModal.statusLine.textContent = 'Could not load what you can receive. Try again in a moment.';
       return;
-    } finally {
-      button.disabled = false;
     }
     this.tokenPicker.open({
-      title: 'Receive',
+      title: 'Deposit',
       // Not an asset deposits never land on, whatever the bridge lists.
       accepts: (asset) => intentsDeposits.isDepositable(asset.assetId) && !DEPOSIT_CREDITS[asset.assetId],
       onPick: (key) => this.receiveModal.open(key),
@@ -5417,10 +5575,14 @@ class MultichainController {
   async updateSummary({ refresh = false } = {}) {
     if (!this.summaryValue) return false;
     if (refresh) await intentsAssets.refresh();
-    this.summaryValue.textContent = totalIsUnknown(intentsAssets.getStatus(), intentsAssets.getNetwork())
-      ? '—'
-      : formatUsd(intentsAssets.getTotalUsd());
-    return ['connected', 'unpriced'].includes(intentsAssets.getStatus());
+    const valuation = intentsAssets.getUsdValuation();
+    const status = intentsAssets.getStatus();
+    this.summaryValue.textContent = valuation.valueText;
+    this.summaryValue.style.color = valuation.state === 'none' && !['idle', 'loading'].includes(status)
+      ? 'var(--danger-color)' : '';
+    this.summaryStatus.textContent = intentsAssets.balances !== null
+      ? valuation.caption : status === 'unavailable' ? 'balances unavailable' : '';
+    return ['connected', 'unpriced'].includes(status);
   }
 }
 

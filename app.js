@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'i'; // Also increment this when you increment version.html
+const version = 'j'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -103,6 +103,8 @@ import {
   DAO_PROPOSAL_DAY_MS,
   DAO_PROPOSAL_GRACE_PERIOD_MAX_MS,
   DAO_PROPOSAL_TITLE_MAX_LENGTH,
+  DAO_USER_VOTE_CAST_STATUSES,
+  DAO_USER_VOTE_SUMMARY_KINDS,
   DAO_PROJECT_DURATION_MAX_DAYS,
   DAO_PROJECT_MAX_MILESTONES,
   DAO_PROJECT_MILESTONE_TEXT_MAX_LENGTH,
@@ -127,6 +129,7 @@ import {
   getDaoTrackedProposalMetadataEntries,
   getDaoProposalClaimWindow,
   getDaoProposalOptionLabels,
+  getDaoUserVoteSummary,
   getDaoPendingFinalizationOutcome,
   getDaoProposalTimeline,
   getDaoVoteReminderSchedule,
@@ -211,6 +214,7 @@ import {
   isPublicKeyForAddress,
   validateChatTransaction,
   QRImageDecoder,
+  WalletUsdValuation,
 } from './lib.js';
 
 import {
@@ -266,12 +270,15 @@ let initialViewportHeight = window.innerHeight;
 
 // parameters to add to the call URL when opening the page
 const callUrlParams = `#config.toolbarButtons=["camera","microphone","desktop","hangup"]&config.disableDeepLinking=true&config.prejoinPageEnabled=false&config.startWithAudioMuted=false&startWithVideoMuted=false&userInfo.displayName=`
-const ALLOWED_CALL_ORIGINS = Object.freeze(['https://meet.liberdus.com']);
+// Keep existing default-host call links valid when the configured service changes.
+const ALLOWED_CALL_ORIGINS = Object.freeze(['https://meet.liberdus.com', new URL(network.meetUrl).origin]);
 
 function normalizeCallUrl(value) {
-  const normalized = normalizeHttpsUrl(value, ALLOWED_CALL_ORIGINS);
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value.trim())) return '';
+  const normalized = normalizeResourceUrl(value, network.meetUrl);
   if (!normalized) return '';
   const url = new URL(normalized);
+  if (!ALLOWED_CALL_ORIGINS.includes(url.origin)) return '';
   url.hash = '';
   return url.toString();
 }
@@ -2006,6 +2013,7 @@ class ChatsScreen {
       let displayPreview = previewHTML;
       const isOutgoingPreview = isShowingReactionPreview ? reactionPreview.my : latestActivity.my;
       let displayPrefix = isOutgoingPreview ? '< ' : '> ';
+      const draft = contact.draft;
       let hasDraftAttachment = false;
 
       // Check for draft attachments
@@ -2014,8 +2022,9 @@ class ChatsScreen {
       }
       
       // If there's draft text, show that (prioritize draft text over reply preview)
-      if (contact.draft && contact.draft.trim() !== '') {
-        displayPreview = truncateMessage(escapeHtml(contact.draft), 50);
+      if (draft && draft.trim() !== '') {
+        const draftPreview = draft.length > 50 ? draft.slice(0, 50) + '...' : draft;
+        displayPreview = escapeHtml(draftPreview);
         displayPrefix = '< ';
       } else if (contact.draftReplyTxid) {
         // If there's only reply content (no text), show "Replying to: [message]"
@@ -2028,7 +2037,7 @@ class ChatsScreen {
           displayPreview = '[message]';
         }
         displayPrefix = 'Replying to: ';
-      } else if (hasDraftAttachment && !contact.draft) {
+      } else if (hasDraftAttachment && !draft) {
         // If there's only attachment draft (no text, no reply), show attachment indicator
         const attachmentCount = contact.draftAttachments.length;
         displayPreview = attachmentCount === 1 
@@ -2051,7 +2060,7 @@ class ChatsScreen {
                   <div class="chat-time">${timeDisplay}</div>
               </div>
               <div class="chat-message">
-                ${failedIndicatorHTML}${unreadCount ? `<span class="chat-unread">${unreadCount}</span>` : ((contact.draft || contact.draftReplyTxid || hasDraftAttachment) ? `<span class="chat-draft" title="Draft"></span>` : '')}
+                ${failedIndicatorHTML}${unreadCount ? `<span class="chat-unread">${unreadCount}</span>` : ((draft || contact.draftReplyTxid || hasDraftAttachment) ? `<span class="chat-draft" title="Draft"></span>` : '')}
                 ${displayPrefix}${displayPreview}
               </div>
           </div>
@@ -2415,9 +2424,10 @@ class WalletScreen {
       this.assetsList.innerHTML = walletData.assets
         .map((asset) => {
           const assetUsdPrice = getAssetUsdPrice(asset);
-          const assetNetworth = calculateAssetUsdValue(asset);
-          const assetPriceText = assetUsdPrice === null ? 'N/A' : `$${assetUsdPrice.toFixed(6)}`;
-          const assetNetworthText = assetNetworth === null ? 'N/A' : `$${assetNetworth.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          const valuation = WalletUsdValuation.fromValue(asset.balance === 0n ? 0 : calculateAssetUsdValue(asset));
+          const assetRateText = assetUsdPrice === null
+            ? escapeHtml(asset.symbol)
+            : `1 ${escapeHtml(asset.symbol)} = $${assetUsdPrice.toFixed(6)}`;
           const [whole, fraction] = formatDisplayAmount(big2str(asset.balance, 18), 6).split('.');
           const assetQuantityText = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fraction ? `.${fraction}` : '');
           return `
@@ -2425,9 +2435,13 @@ class WalletScreen {
                     <img src="./media/liberdus_logo_50.png" class="asset-logo" alt="Liberdus">
                     <div class="asset-info">
                         <div class="asset-name">${escapeHtml(asset.name)}</div>
-                        <div class="asset-symbol">1 ${escapeHtml(asset.symbol)} = ${assetPriceText}</div>
+                        <div class="asset-symbol">${assetRateText}</div>
                     </div>
-                    <div class="asset-balance"><span class="wallet-native-quantity">${assetQuantityText} ${escapeHtml(asset.symbol)}</span><span class="wallet-native-usd">${assetNetworthText}</span></div>
+                    <div class="asset-balance">
+                        <span class="wallet-native-quantity">${assetQuantityText} ${escapeHtml(asset.symbol)}</span>
+                        <span class="wallet-native-usd${valuation.state === 'none' ? ' wallet-price-unavailable' : ''}">${valuation.valueText}</span>
+                        <span class="wallet-price-status">${valuation.caption}</span>
+                    </div>
                 </div>
             `;
         })
@@ -3206,31 +3220,46 @@ class DaoModal {
     return this.loadPageWithFeedback(false, 'Failed to load more proposals');
   }
 
-  async refreshAfterDaoSettlement(pendingTxInfo, outcome) {
+  async refreshAfterDaoSettlement(pendingTxInfo, outcome, receipt) {
+    const accountData = myData;
+    const { type, proposalNumber, proposalStoreId } = pendingTxInfo;
+    const isVote = type === DAO_ACTION_TYPES.VOTE;
     const refreshId = ++this.refreshSequence;
     daoProposalVoteTracker.handleSettlement({
-      type: pendingTxInfo?.type,
+      type,
       outcome,
-      proposalNumber: pendingTxInfo?.proposalNumber,
-      votingEndsAt: pendingTxInfo?.votingEndsAt,
-      estimatedClaimEndsAt: pendingTxInfo?.estimatedClaimEndsAt,
-      reminderExpiresAt: pendingTxInfo?.reminderExpiresAt,
+      proposalNumber,
+      txid: pendingTxInfo.txid,
+      optionWeights: receipt?.additionalInfo?.optionWeights,
+      votingEndsAt: pendingTxInfo.votingEndsAt,
+      estimatedClaimEndsAt: pendingTxInfo.estimatedClaimEndsAt,
+      reminderExpiresAt: pendingTxInfo.reminderExpiresAt,
     });
+    if (isVote && outcome !== 'timeout') {
+      try {
+        saveState();
+      } catch (error) {
+        console.warn('Failed to save the vote receipt:', error);
+      }
+    }
 
     let didRefreshDaoData = false;
     try {
       await daoRepo.refresh({ force: true });
+      // Claim tracking reads the active account after the metadata request.
+      if (myData !== accountData) return false;
       await this.syncTrackedClaimWindows(null);
       if (this.isActive()) {
         await this.loadSelectedFilter({ reset: true });
       }
-      if (!daoRepo.getProposalById(pendingTxInfo?.proposalStoreId)) {
-        await daoRepo.refreshProposal(pendingTxInfo?.proposalNumber);
+      if (!daoRepo.getProposalById(proposalStoreId)) {
+        await daoRepo.refreshProposal(proposalNumber);
       }
       didRefreshDaoData = true;
     } catch (error) {
       console.warn('DAO settlement refresh failed:', error);
     }
+    if (myData !== accountData) return false;
 
     if (didRefreshDaoData) {
       this.lastSuccessfulRefreshId = Math.max(this.lastSuccessfulRefreshId, refreshId);
@@ -3241,12 +3270,15 @@ class DaoModal {
     // proposal state. Failed and timed-out actions can safely release the UI.
     if (didRefreshDaoData || outcome !== 'success') {
       if (this.isActive()) this.render();
-      proposalInfoModal.refreshIfOpen(pendingTxInfo.proposalStoreId, {
-        resetVoteForm: outcome === 'success' && pendingTxInfo.type === DAO_ACTION_TYPES.VOTE,
+      proposalInfoModal.refreshIfOpen(proposalStoreId, {
+        resetVoteForm: outcome === 'success' && isVote
+          && !pendingTxInfo.daoVoteReceiptRetryAt,
       });
+    } else if (isVote) {
+      proposalInfoModal.refreshIfOpen(proposalStoreId, { voteOnly: true });
     }
 
-    if (outcome === 'success' && pendingTxInfo.type === DAO_ACTION_TYPES.APPLY_PARAMETERS) {
+    if (outcome === 'success' && type === DAO_ACTION_TYPES.APPLY_PARAMETERS) {
       try {
         const refreshed = await getNetworkParams(true);
         if (!refreshed) throw new Error('Network parameter refresh failed');
@@ -6707,16 +6739,22 @@ class ProposalInfoModal {
       ])
       : '';
     if (this.content) {
+      const voteDisclosure = this.content.querySelector('.proposal-user-vote-section');
+      const voteSummaryFocused = voteDisclosure?.firstElementChild.matches(':focus');
       this.content.innerHTML = [
         renderDaoProposalHeading(proposal),
         projectProposalInfoSection,
         isProjectProposal ? '' : proposalOptionsSection,
         state === 'voting' ? this.renderCurrentVoteTotals(proposal) : '',
         isProjectProposal ? '' : proposalResultsSection,
+        `<div class="proposal-user-vote-slot">${this.renderUserVote(proposal, currentAddress, voteDisclosure?.open)}</div>`,
         state === 'review'
           ? this.renderCommitteeReviewStatus(committeeReview, reviewWindow, currentAddress)
           : '',
       ].filter(Boolean).join('');
+      if (voteSummaryFocused) {
+        this.content.querySelector('.proposal-user-vote-heading')?.focus({ preventScroll: true });
+      }
     }
     if (this.detailsContent) {
       this.detailsContent.innerHTML = this.renderProposalDetails({
@@ -6780,6 +6818,107 @@ class ProposalInfoModal {
         ${meter}
       </section>
     `;
+  }
+
+  // Shows only the signed-in account's own vote: locally saved casts when present,
+  // otherwise a neutral "Vote recorded" when the proposal's voterList proves it voted.
+  renderUserVote(proposal, currentAddress, expanded = true) {
+    const summary = getDaoUserVoteSummary({
+      proposal,
+      address: currentAddress,
+      casts: daoProposalVoteTracker.getCasts(proposal.number),
+    });
+    if (summary.kind === DAO_USER_VOTE_SUMMARY_KINDS.NONE) return '';
+
+    const disclosure = `<details class="proposal-info-section proposal-user-vote-section"${expanded ? ' open' : ''}>`;
+
+    if (summary.kind === DAO_USER_VOTE_SUMMARY_KINDS.VOTED) {
+      return `
+        ${disclosure}
+          <summary class="proposal-user-vote-heading"><span>Your vote</span></summary>
+          <div class="proposal-user-vote-body">
+            <div class="proposal-user-vote-message">Vote recorded</div>
+            <p class="proposal-user-vote-note">The network confirms this account voted. The option allocation and spend were not saved on this device.</p>
+          </div>
+        </details>
+      `;
+    }
+
+    const hasMultipleCasts = summary.casts.length > 1;
+    const totalSpend = summary.casts
+      .filter((cast) => cast.status !== DAO_USER_VOTE_CAST_STATUSES.FAILED)
+      .reduce((total, cast) => total + cast.spend, 0n);
+    const cards = summary.casts.map((cast, index) => {
+      const castLabel = hasMultipleCasts ? `Vote ${index + 1}` : 'Vote';
+      const castTime = formatDaoCompactTimestamp(cast.timestamp);
+      const statusLabel = cast.status[0].toUpperCase() + cast.status.slice(1);
+      const isFailed = cast.status === DAO_USER_VOTE_CAST_STATUSES.FAILED;
+      const hasPower = cast.totalPower !== null;
+      const rows = cast.rows.map((row) => {
+        const percent = hasPower ? formatDaoPercent(row.share) : '';
+        const amount = hasPower ? formatDaoVotingPower(row.power) : formatDaoLibWei(row.allocation);
+        const label = `${row.option}: ${percent ? `${percent}, ` : ''}${amount}`;
+        return `
+          <div class="proposal-user-vote-row" title="${escapeDaoFormAttribute(label)}" aria-label="${escapeDaoFormAttribute(label)}">
+            <span>${escapeHtml(row.option)}</span>
+            ${hasPower ? `<span>${escapeHtml(percent)}</span>` : ''}
+            <strong>${escapeHtml(amount)}</strong>
+          </div>
+        `;
+      }).join('');
+      const powerRow = hasPower
+        ? `<div class="proposal-user-vote-total"><span>Voting power</span><strong>${escapeHtml(formatDaoVotingPower(cast.totalPower))}</strong></div>`
+        : '';
+      const spendRow = hasMultipleCasts || isFailed
+        ? `<div class="proposal-user-vote-total"><span>${isFailed ? 'Attempted' : 'Spend'}</span><strong>${escapeHtml(formatDaoLibWei(cast.spend))}</strong></div>`
+        : '';
+
+      return `
+        <div class="proposal-user-vote-card"${hasPower ? ' data-has-power' : ''} role="group" aria-label="${escapeDaoFormAttribute(`${castLabel}${castTime ? `, ${castTime}` : ''}, ${statusLabel}`)}">
+          <div class="proposal-user-vote-card-heading">
+            <div class="proposal-user-vote-card-meta">
+              <span>${escapeHtml(castTime ? `${castLabel} · ${castTime}` : castLabel)}</span>
+              <span class="proposal-user-vote-status">${escapeHtml(statusLabel)}</span>
+            </div>
+          </div>
+          <div class="proposal-user-vote-row proposal-user-vote-columns" aria-hidden="true">
+            <span>Option</span>
+            ${hasPower ? '<span>Share</span>' : ''}
+            <span>${hasPower ? 'Power' : 'LIB'}</span>
+          </div>
+          ${rows}
+          ${spendRow || powerRow ? `<div class="proposal-user-vote-totals">${spendRow}${powerRow}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    return `
+      ${disclosure}
+        <summary class="proposal-user-vote-heading">
+          <span>Your vote</span>
+          <span class="proposal-user-vote-spend">Spent <strong>${escapeHtml(formatDaoLibWei(totalSpend))}</strong></span>
+        </summary>
+        <div class="proposal-user-vote-body">${cards}</div>
+      </details>
+    `;
+  }
+
+  // Re-renders only the Your vote slot of the open modal, e.g. right after a
+  // submitted cast is saved, without rebuilding the rest of the proposal view.
+  refreshUserVote(proposal) {
+    try {
+      const slot = this.content?.querySelector('.proposal-user-vote-slot');
+      if (!slot || !proposal) return;
+      const disclosure = slot.querySelector('.proposal-user-vote-section');
+      const summaryFocused = disclosure?.firstElementChild.matches(':focus');
+      slot.innerHTML = this.renderUserVote(proposal, getDaoCurrentAccountAddress(), disclosure?.open);
+      if (summaryFocused) {
+        slot.querySelector('.proposal-user-vote-heading')?.focus({ preventScroll: true });
+      }
+    } catch (error) {
+      // The vote is already submitted and saved; a display problem must not read as a failed vote.
+      console.warn('Failed to refresh the saved vote view:', error);
+    }
   }
 
   getCurrentVoteTotalRows(proposal) {
@@ -7793,7 +7932,7 @@ class ProposalInfoModal {
       if (this.isSubmitting && this.canSubmitVote) {
         this.voteSubmitButton.textContent = 'Submitting...';
       }
-      if (pendingVote) this.voteSubmitButton.textContent = pendingLabel;
+      if (pendingVote) this.voteSubmitButton.textContent = 'Submitted';
     }
     if (this.voteSpendMultipleInput) this.voteSpendMultipleInput.disabled = this.isSubmitting || pendingVote;
     if (this.voteOptions) {
@@ -8273,6 +8412,7 @@ class ProposalInfoModal {
         timestamp: result.transaction.timestamp,
       });
       saveState();
+      this.refreshUserVote(proposal);
       showToast(getDaoTransactionMessage(DAO_ACTION_TYPES.VOTE, 'pending'), 4000, 'info');
       this.updateSubmitButtons();
     } catch (error) {
@@ -8291,11 +8431,13 @@ class ProposalInfoModal {
     daoModal.restoreListFocus();
   }
 
-  refreshIfOpen(proposalId, { resetVoteForm = false } = {}) {
+  refreshIfOpen(proposalId, { resetVoteForm = false, voteOnly = false } = {}) {
     if (!this.modal.classList.contains('active') || this._currentProposalId !== proposalId) return;
 
     const proposal = this.getCurrentProposal();
-    if (proposal) {
+    if (voteOnly) {
+      this.refreshUserVote(proposal);
+    } else if (proposal) {
       if (resetVoteForm) this.resetVoteState(proposal);
       this.renderProposal(proposal);
     } else {
@@ -9427,7 +9569,8 @@ class SignInModal {
    */
   async loadUploadedSignInAvatar(item, avatarId) {
     try {
-      const blobUrl = await contactAvatarCache.getBlobUrl(avatarId);
+      const owner = MediaCacheOwnership.getOwnerKey({ username: item.dataset.username, netid: network.netid });
+      const blobUrl = await contactAvatarCache.getBlobUrl(avatarId, owner);
       if (!blobUrl || !item.isConnected) return;
 
       const image = document.createElement('img');
@@ -11699,8 +11842,7 @@ function getAssetUsdPrice(asset) {
     return getLibUsdPriceFromParameters();
   }
 
-  const price = Number(asset?.price);
-  return Number.isFinite(price) && price >= 0 ? price : null;
+  return WalletUsdValuation.fromValue(asset?.price).total;
 }
 
 function calculateAssetUsdValue(asset) {
@@ -13043,7 +13185,6 @@ async function verifyPaymentBubbles() {
   for (const bubble of bubbles) {
     const intentHash = bubble.dataset.intentHash;
     if (!intentHash) continue;
-    const sentAt = Number(bubble.closest('[data-message-timestamp]')?.dataset.messageTimestamp) || null;
     // The whole claim, from the stored message: the check compares what was
     // claimed -- token, amount, the two sides -- with what the verifier logged.
     const found = findPaymentMessage(intentHash);
@@ -13056,7 +13197,6 @@ async function verifyPaymentBubbles() {
     let result = intentsPaymentVerifications.get(intentHash);
     if (!result || result.state === 'pending' || result.state === 'unverifiable') {
       result = await verifyTransferClaim(found.message.payment, {
-        sentAt,
         expectedFrom: found.message.my ? me : them,
         expectedTo: found.message.my ? them : me,
       });
@@ -13082,25 +13222,25 @@ function findPaymentMessage(intentHash) {
   return null;
 }
 
-// Answers that will not change. Anything else is asked again next time.
-const RESTING_PAYMENT_STATES = new Set(['settled', 'failed', 'expired']);
+// Keep these results when the bubble is rendered again, including an
+// inconclusive relay miss for receipts without a usable payment time.
+const RESTING_PAYMENT_STATES = new Set(['settled', 'failed', 'expired', 'unknown']);
 
 /**
  * Keep a payment's verdict on the stored message itself.
  *
  * The relay forgets intents within days, so a payment checked once must stay
  * checked: without this, a genuine payment verified today would come back
- * "not found" next week. The bubble renders from the stored field, and the
- * verifier only asks about bubbles still unchecked or pending.
+ * "not found" next week. The bubble renders from the stored field, and a
+ * newly checked copy of the same intent cannot replace a saved result.
  */
 function rememberPaymentVerdict(intentHash, state) {
   let changed = false;
   for (const contact of Object.values(myData?.contacts || {})) {
     for (const message of contact.messages || []) {
-      if (message.payment?.intentHash === intentHash && message.paymentVerified !== state) {
-        message.paymentVerified = state;
-        changed = true;
-      }
+      if (message.payment?.intentHash !== intentHash || RESTING_PAYMENT_STATES.has(message.paymentVerified)) continue;
+      message.paymentVerified = state;
+      changed = true;
     }
   }
   if (changed) saveState();
@@ -13243,6 +13383,7 @@ function syncChatTabNotificationBubble() {
 
 // Actually payments also appear in the chats, so we can add these to
 async function processChats(chats, keys) {
+  const avatarOwner = MediaCacheOwnership.getOwnerKey();
   let newTimestamp = 0;
   const timestamp = myAccount.chatTimestamp || 0;
   const messageQueryTimestamp = Math.max(0, timestamp+1);
@@ -13500,8 +13641,8 @@ async function processChats(chats, keys) {
                   
                   if (!messageToDelete.my && originalSender === from) {
                     // This is a message received from sender, who is now deleting it - valid
-                    // Purge cached image data for attachments, if any
-                    chatModal.purgeImageCaches(messageToDelete.xattach);
+                    // Purge cached media for attachments, if any
+                    void chatModal.purgeAttachmentCaches(messageToDelete.xattach, messageToDelete, from);
 
                     // Mark the message as deleted
                     messageToDelete.deleted = MESSAGE_DELETED_STATE_ALL;
@@ -13526,8 +13667,8 @@ async function processChats(chats, keys) {
                     );
                   } else if (messageToDelete.my && normalizeAddress(keys.address) === normalizeAddress(tx.from)) {
                     // This is our own message, and we're deleting it - valid
-                    // Purge cached image data for attachments, if any
-                    chatModal.purgeImageCaches(messageToDelete.xattach);
+                    // Purge cached media for attachments, if any
+                    void chatModal.purgeAttachmentCaches(messageToDelete.xattach, messageToDelete, from);
 
                     // Mark the message as deleted
                     messageToDelete.deleted = MESSAGE_DELETED_STATE_ALL;
@@ -13779,12 +13920,14 @@ async function processChats(chats, keys) {
             contact.senderInfo = cleanSenderInfo(payload.senderInfo)
             delete payload.senderInfo;
             if (contact.senderInfo.avatarId && contact.senderInfo.avatarKey && contact.avatarId !== contact.senderInfo.avatarId) {
-              downloadAndDecryptAvatar(`${network.attachmentServerUrl}/get/${contact.senderInfo.avatarId}`, contact.senderInfo.avatarKey)
-                .then(async (blob) => {
+              const { avatarId, avatarKey } = contact.senderInfo;
+              const avatarUrl = `${network.attachmentServerUrl}/get/${avatarId}`;
+              downloadAndDecryptAvatar(avatarUrl, avatarKey)
+                .then(async blob => {
                   try {
                     // Save blob under the server-provided avatar id
-                    await contactAvatarCache.save(contact.senderInfo.avatarId, blob);
-                    contact.avatarId = contact.senderInfo.avatarId;
+                    await contactAvatarCache.save(avatarId, blob, avatarOwner);
+                    contact.avatarId = avatarId;
                     contact.hasAvatar = true;
                     // If contact provided a new avatar, prefer their sent avatar
                     myData.contacts ??= {};
@@ -13959,11 +14102,13 @@ async function processChats(chats, keys) {
             contact.senderInfo = cleanSenderInfo(payload.senderInfo);
             delete payload.senderInfo;
             if (contact.senderInfo.avatarId && contact.senderInfo.avatarKey && contact.avatarId !== contact.senderInfo.avatarId) {
-              downloadAndDecryptAvatar(`${network.attachmentServerUrl}/get/${contact.senderInfo.avatarId}`, contact.senderInfo.avatarKey)
-                .then(async (blob) => {
+              const { avatarId, avatarKey } = contact.senderInfo;
+              const avatarUrl = `${network.attachmentServerUrl}/get/${avatarId}`;
+              downloadAndDecryptAvatar(avatarUrl, avatarKey)
+                .then(async blob => {
                   try {
-                    await contactAvatarCache.save(contact.senderInfo.avatarId, blob);
-                    contact.avatarId = contact.senderInfo.avatarId;
+                    await contactAvatarCache.save(avatarId, blob, avatarOwner);
+                    contact.avatarId = avatarId;
                     contact.hasAvatar = true;
                     // If contact provided a new avatar, prefer their sent avatar
                     myData.contacts ??= {};
@@ -14544,8 +14689,7 @@ async function refreshNetworkParamsOnTxFeeMismatch(reason) {
  * @param {string} txid - The transaction ID
  * @returns {Promise<Object>} The response from the injectTx call
  */
-async function injectTx(tx, txid, expectedAccount = null) {
-  if (expectedAccount && myAccount !== expectedAccount) throw new Error('Account changed before submission.');
+async function injectTx(tx, txid) {
   if (!isOnline) {
     return null;
   }
@@ -14613,8 +14757,6 @@ async function injectTx(tx, txid, expectedAccount = null) {
     if (!data.result.reason && normalizedReason) {
       data.result.reason = normalizedReason;
     }
-
-    if (expectedAccount && myAccount !== expectedAccount) return data;
 
     if (normalizedSuccess === true) {
       const pendingTxData = {
@@ -14779,7 +14921,9 @@ class SearchMessagesModal {
     if (!searchText || !myData?.contacts) return [];
 
     const results = [];
-    const searchLower = searchText.toLowerCase();
+    // Case-insensitive literal matching; regex metacharacters in the query are escaped.
+    // The same pattern finds and highlights matches, so every result shows a highlight
+    const matchPattern = new RegExp(escapeRegExp(searchText), 'gi');
 
     // Search through all contacts and their messages
     Object.entries(myData.contacts).forEach(([address, contact]) => {
@@ -14790,20 +14934,8 @@ class SearchMessagesModal {
         // Skip deleted messages and call messages
         if (isDeleted(message)) return;
         if (message.type === 'call') return;
-        if (message.message.toLowerCase().includes(searchLower)) {
-          // Highlight matching text
-          const messageText = escapeHtml(message.message);
-          // Escape search text for safe regex usage
-          const escapedSearch = escapeRegExp(searchText);
-          const highlightedText = messageText.replace(new RegExp(escapedSearch, 'gi'), (match) => `<mark>${match}</mark>`);
-          
-          const maxDisplayLength = 100;
-          
-          // Adjust maxLength to account for <mark> tags (add 13 chars per highlight)
-          // This ensures truncateMessage gets enough characters to display ~100 chars of actual text
-          const highlightCount = (highlightedText.match(/<mark>/g) || []).length;
-          const adjustedMaxLength = maxDisplayLength + (highlightCount * 13); // <mark> + </mark> = 13 chars
-          
+        matchPattern.lastIndex = 0; // a global pattern resumes from its last match
+        if (matchPattern.test(message.message)) {
           const displayedName = getContactDisplayName(contact);
           results.push({
             contactAddress: address,
@@ -14811,7 +14943,8 @@ class SearchMessagesModal {
             messageId: message.txid,
             message: message, // Pass the entire message object
             timestamp: message.timestamp,
-            preview: truncateMessage(highlightedText, adjustedMaxLength),
+            // Excerpt and match positions on the raw text; rendered as nodes in displaySearchResults
+            preview: this.buildSearchPreview(message.message, matchPattern),
             my: message.my, // Include the my property
           });
         }
@@ -14819,6 +14952,81 @@ class SearchMessagesModal {
     });
 
     return results.sort((a, b) => b.timestamp - a.timestamp);
+  }
+
+  /**
+   * Selects the excerpt shown for a search result and locates the matches inside it.
+   * Everything is computed on the raw message text and character positions, so encoding
+   * never changes what is matched. renderSearchPreview() turns the result into DOM nodes.
+   * @param {string} text raw message text
+   * @param {RegExp} matchPattern global, case-insensitive pattern built from the escaped query
+   * @param {number} maxLength approximate number of message characters to show
+   * @returns {{text: string, highlights: Array<{start: number, end: number}>, leadingEllipsis: boolean, trailingEllipsis: boolean}}
+   */
+  buildSearchPreview(text, matchPattern, maxLength = 100) {
+    const matches = [];
+    matchPattern.lastIndex = 0; // matchAll() starts from the pattern's current position
+    for (const match of text.matchAll(matchPattern)) {
+      if (!match[0]) break; // an empty pattern would never advance
+      matches.push({ start: match.index, end: match.index + match[0].length });
+    }
+
+    let start = 0;
+    let end = text.length;
+    if (text.length > maxLength) {
+      const first = matches[0];
+      if (first) {
+        // Show some context before the first match and fill the rest of the window after it
+        start = Math.max(0, first.start - Math.floor(maxLength * 0.3));
+        end = Math.min(text.length, start + maxLength);
+        // When the window reaches the end of the message, pull it back to show a full window
+        if (end === text.length) start = Math.max(0, text.length - maxLength);
+        // Never cut a match short at the end of the excerpt
+        const straddling = matches.find((m) => m.start < end && m.end > end);
+        if (straddling) end = straddling.end;
+      } else {
+        end = maxLength;
+      }
+      // Keep surrogate pairs (e.g. emoji) intact at the excerpt edges
+      const isLowSurrogate = (index) => (text.charCodeAt(index) & 0xfc00) === 0xdc00;
+      if (start > 0 && isLowSurrogate(start)) start -= 1;
+      if (end < text.length && isLowSurrogate(end)) end += 1;
+    }
+
+    return {
+      text: text.slice(start, end),
+      highlights: matches
+        .filter((m) => m.start >= start && m.start < end)
+        .map((m) => ({ start: m.start - start, end: Math.min(m.end, end) - start })),
+      leadingEllipsis: start > 0,
+      trailingEllipsis: end < text.length,
+    };
+  }
+
+  /**
+   * Renders a preview from buildSearchPreview() as text nodes and <mark> elements.
+   * Previewed and query text are assigned through textContent and never parsed as HTML.
+   * Also used by contact search for its "field: value" labels.
+   * @param {ReturnType<SearchMessagesModal['buildSearchPreview']>} preview
+   * @param {string} prefix text placed before the preview, e.g. a direction marker or field label
+   * @returns {DocumentFragment}
+   */
+  renderSearchPreview(preview, prefix = '') {
+    const fragment = document.createDocumentFragment();
+    let pendingText = `${prefix}${preview.leadingEllipsis ? '...' : ''}`;
+    let cursor = 0;
+    preview.highlights.forEach(({ start, end }) => {
+      pendingText += preview.text.slice(cursor, start);
+      if (pendingText) fragment.appendChild(document.createTextNode(pendingText));
+      pendingText = '';
+      const mark = document.createElement('mark');
+      mark.textContent = preview.text.slice(start, end);
+      fragment.appendChild(mark);
+      cursor = end;
+    });
+    pendingText += preview.text.slice(cursor) + (preview.trailingEllipsis ? '...' : '');
+    if (pendingText) fragment.appendChild(document.createTextNode(pendingText));
+    return fragment;
   }
 
   // this is also used by contact search 
@@ -14868,24 +15076,24 @@ class SearchMessagesModal {
 
       const avatarHtml = await getContactAvatarHtml(result.contactAddress);
 
-      // Format message preview with "<" for user messages and ">" for contact messages
-      // make this textContent?
-      const messagePreview = result.my ? `< ${result.preview}` : `> ${result.preview}`;
-
       resultElement.innerHTML = `
               <div class="chat-avatar">
                   ${avatarHtml}
               </div>
               <div class="chat-content">
                   <div class="chat-header">
-                      <div class="chat-name">${result.username}</div>
+                      <div class="chat-name"></div>
                       <div class="chat-time">${formatTime(result.timestamp)}</div>
                   </div>
-                  <div class="chat-message">
-                      ${messagePreview}
-                  </div>
+                  <div class="chat-message"></div>
               </div>
           `;
+
+      // Contact names are local or sender-supplied text, so they are never parsed as HTML
+      resultElement.querySelector('.chat-name').textContent = result.username;
+      // Message preview: "<" for user messages, ">" for contact messages. Rendered as text
+      // nodes and <mark> elements so message and query text are never parsed as HTML
+      resultElement.querySelector('.chat-message').appendChild(this.renderSearchPreview(result.preview, result.my ? '< ' : '> '));
 
       resultElement.addEventListener('click', async (event) => {
         event.stopImmediatePropagation(); // Stop all other listeners and bubbling immediately
@@ -14939,6 +15147,196 @@ class SearchMessagesModal {
 }
 
 const messageSearchModal = new SearchMessagesModal();
+
+class ContactSearch {
+  /**
+   * Lists the profile fields a contact can be found by, each once per distinct value.
+   * Only these fields are searched: the rest of senderInfo (avatarId, avatarKey, timezone)
+   * holds identifiers and keys a user never searches for and should not see in a result label.
+   * @param {object} contact
+   * @returns {Array<{field: string, value: string}>} display label and raw value per field
+   */
+  static getSearchableFields(contact) {
+    const fields = [];
+    const seenValues = new Set();
+
+    for (const field of ['username', 'name', 'email', 'phone', 'linkedin', 'x']) {
+      for (const rawValue of [contact[field], contact.senderInfo?.[field]]) {
+        const value = String(rawValue ?? '').trim();
+        const lowerValue = value.toLowerCase();
+        if (!value || seenValues.has(lowerValue)) continue;
+        seenValues.add(lowerValue);
+        fields.push({ field, value });
+      }
+    }
+
+    return fields;
+  }
+
+  static getMatchType(contact, query, usernameQuery = query) {
+    let rank = -1;
+    for (const { field, value } of ContactSearch.getSearchableFields(contact)) {
+      const search = field === 'username' ? usernameQuery : query;
+      const candidate = value.toLowerCase();
+      if (candidate === search) return 2;
+      if (candidate.startsWith(search)) rank = 1;
+      else if (rank < 0 && candidate.includes(search)) rank = 0;
+    }
+    return rank;
+  }
+}
+
+class ContactAutocomplete {
+  constructor({ input, list, getContacts, onSelect }) {
+    this.input = input;
+    this.list = list;
+    this.getContacts = getContacts;
+    this.onSelect = onSelect;
+    this.contacts = [];
+    this.activeIndex = -1;
+
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', list.id);
+    list.setAttribute('role', 'listbox');
+    this.close();
+
+    input.addEventListener('focus', () => this.render());
+    input.addEventListener('click', () => {
+      if (list.hidden) this.render();
+    });
+    input.addEventListener('input', (event) => {
+      if (event.isTrusted && input === input.ownerDocument.activeElement) this.render();
+      else this.close();
+    });
+    input.addEventListener('blur', () => this.close());
+    input.addEventListener('keydown', (event) => this.handleKeyDown(event));
+
+    // Keep focus on the input during a pick. A touch scroll does not fire mousedown.
+    list.addEventListener('mousedown', (event) => {
+      if (event.target.closest('.contact-autocomplete-option')) event.preventDefault();
+    });
+    list.addEventListener('click', (event) => {
+      const option = event.target.closest('.contact-autocomplete-option');
+      if (option) this.select(Number(option.dataset.index));
+    });
+  }
+
+  getDisplayName(contact) {
+    return contact.displayName || contact.name || contact.username;
+  }
+
+  getMatches() {
+    const query = this.input.value.trim().toLowerCase();
+    const contacts = this.getContacts();
+    const compareUsernames = (a, b) => (a.username || '').localeCompare(b.username || '');
+
+    if (!query) {
+      return [...contacts].sort((a, b) =>
+        this.getDisplayName(a).localeCompare(this.getDisplayName(b))
+        || compareUsernames(a, b));
+    }
+
+    const usernameQuery = query.length > 1 ? query.replace(/^@/, '') : query;
+    return contacts
+      .map((contact) => ({ contact, rank: ContactSearch.getMatchType(contact, query, usernameQuery) }))
+      .filter(({ rank }) => rank >= 0)
+      .sort((a, b) => b.rank - a.rank || compareUsernames(a.contact, b.contact))
+      .map(({ contact }) => contact);
+  }
+
+  render() {
+    this.contacts = this.getMatches();
+    this.activeIndex = -1;
+    this.input.removeAttribute('aria-activedescendant');
+    const options = this.list.ownerDocument.createDocumentFragment();
+    this.contacts.forEach((contact, index) => options.append(this.createOption(contact, index)));
+    this.list.replaceChildren(options);
+    this.list.scrollTop = 0;
+    this.list.hidden = this.contacts.length === 0;
+    this.input.setAttribute('aria-expanded', String(!this.list.hidden));
+  }
+
+  createOption(contact, index) {
+    const document = this.list.ownerDocument;
+    const option = document.createElement('div');
+    option.id = `${this.list.id}-option-${index}`;
+    option.className = 'contact-autocomplete-option';
+    option.dataset.index = index;
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', 'false');
+    const avatar = document.createElement('span');
+    avatar.className = 'contact-autocomplete-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'contact-autocomplete-text';
+    const name = this.getDisplayName(contact);
+    const label = document.createElement('span');
+    label.textContent = name;
+    text.append(label);
+
+    if (contact.username && contact.username !== name) {
+      const username = document.createElement('span');
+      username.className = 'contact-autocomplete-username';
+      username.textContent = `@${contact.username}`;
+      text.append(username);
+    }
+    option.append(avatar, text);
+    this.renderAvatar(avatar, contact);
+    return option;
+  }
+
+  async renderAvatar(avatar, contact) {
+    const html = await getContactAvatarHtml(contact, 32);
+    if (avatar.isConnected) avatar.innerHTML = html;
+  }
+
+  handleKeyDown(event) {
+    if (event.isComposing) return;
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (this.list.hidden) this.render();
+      if (this.list.hidden) return;
+      event.preventDefault();
+      const lastIndex = this.contacts.length - 1;
+      const next = event.key === 'ArrowDown'
+        ? Math.min(this.activeIndex + 1, lastIndex)
+        : this.activeIndex < 0 ? lastIndex : Math.max(this.activeIndex - 1, 0);
+      this.setActiveOption(next);
+    } else if (!this.list.hidden && event.key === 'Enter' && this.activeIndex >= 0) {
+      event.preventDefault();
+      this.select(this.activeIndex);
+    } else if (!this.list.hidden && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.close();
+    }
+  }
+
+  setActiveOption(index) {
+    this.list.children[this.activeIndex]?.setAttribute('aria-selected', 'false');
+    this.activeIndex = index;
+    const option = this.list.children[index];
+    option.setAttribute('aria-selected', 'true');
+    this.input.setAttribute('aria-activedescendant', option.id);
+    option.scrollIntoView({ block: 'nearest' });
+  }
+
+  select(index) {
+    const contact = this.contacts[index];
+    this.close();
+    if (contact) this.onSelect(contact);
+  }
+
+  close() {
+    this.list.hidden = true;
+    this.list.replaceChildren();
+    this.contacts = [];
+    this.activeIndex = -1;
+    this.input.setAttribute('aria-expanded', 'false');
+    this.input.removeAttribute('aria-activedescendant');
+  }
+}
 
 class SearchContactsModal {
   constructor() {}
@@ -14995,62 +15393,6 @@ class SearchContactsModal {
     return this.modal.classList.contains('active');
   }
 
-  getSearchableFields(contact) {
-    const fields = [];
-    const seenValues = new Set();
-
-    const fieldDefinitions = [
-      { key: 'username', label: 'username' },
-      { key: 'name', label: 'name' },
-      { key: 'email', label: 'email' },
-      { key: 'phone', label: 'phone' },
-      { key: 'linkedin', label: 'linkedin' },
-      { key: 'x', label: 'x' },
-    ];
-    const knownSenderInfoKeys = new Set(fieldDefinitions.map(({ key }) => key));
-    const senderInfo = contact.senderInfo || null;
-
-    const normalize = (value) =>
-      value === undefined || value === null ? '' : String(value).trim();
-
-    const addField = (fieldLabel, value) => {
-      const stringValue = normalize(value);
-      if (!stringValue) {
-        return;
-      }
-
-      const lowerValue = stringValue.toLowerCase();
-      if (seenValues.has(lowerValue)) {
-        return;
-      }
-
-      seenValues.add(lowerValue);
-      fields.push({ field: fieldLabel, value: stringValue });
-    };
-
-    fieldDefinitions.forEach(({ key, label }) => {
-      const primaryValue = normalize(contact[key]);
-      const senderValue = senderInfo ? normalize(senderInfo[key]) : '';
-
-      addField(label, primaryValue);
-
-      if (senderValue && senderValue !== primaryValue) {
-        addField(`${label}`, senderValue);
-      }
-    });
-
-    if (senderInfo) {
-      Object.entries(senderInfo).forEach(([key, value]) => {
-        if (knownSenderInfoKeys.has(key)) {
-          return;
-        }
-        addField(`${key}`, value);
-      });
-    }
-
-    return fields;
-  }
-
   searchContacts(searchText) {
     if (!searchText || !myData?.contacts) return [];
 
@@ -15063,24 +15405,10 @@ class SearchContactsModal {
       if (isFaucetAddress(address)) {
         return;
       }
-      
-      // Fields to search through
-      const searchableFields = this.getSearchableFields(contact);
-      const searchFields = searchableFields.map((f) => f.value);
 
-      // Check if any field matches
-      const matches = searchFields.some((field) => field.toLowerCase().includes(searchLower));
-
-      if (matches) {
-        // Determine match type for sorting
-        const exactMatch = searchFields.some((field) => field.toLowerCase() === searchLower);
-        const startsWithMatch = searchFields.some((field) => field.toLowerCase().startsWith(searchLower));
-
-        results.push({
-          ...contact,
-          address,
-          matchType: exactMatch ? 2 : startsWithMatch ? 1 : 0,
-        });
+      const matchType = ContactSearch.getMatchType(contact, searchLower);
+      if (matchType >= 0) {
+        results.push({ ...contact, address, matchType });
       }
     });
 
@@ -15093,13 +15421,21 @@ class SearchContactsModal {
     });
   }
 
+  /**
+   * Picks the field shown under a contact result and locates the query inside its value.
+   * Exact matches win over prefix matches, which win over substring matches. Match
+   * positions are found on the raw value; displayContactResults() renders them as nodes.
+   * @param {object} contact
+   * @param {string} searchText
+   * @returns {{field: string, preview: ReturnType<SearchMessagesModal['buildSearchPreview']>} | null}
+   */
   createMatchPreview(contact, searchText) {
     if (!searchText) {
-      return '';
+      return null;
     }
 
     const searchLower = searchText.toLowerCase();
-    const searchableFields = this.getSearchableFields(contact);
+    const searchableFields = ContactSearch.getSearchableFields(contact);
 
     const matchBuckets = {
       exact: [],
@@ -15122,16 +15458,16 @@ class SearchContactsModal {
       matchBuckets.exact[0] || matchBuckets.startsWith[0] || matchBuckets.includes[0];
 
     if (!prioritizedField) {
-      return '';
+      return null;
     }
 
-    const highlightRegex = new RegExp(escapeRegExp(searchText), 'gi');
-    const highlightedValue = prioritizedField.value.replace(
-      highlightRegex,
-      (match) => `<mark>${match}</mark>`
-    );
-
-    return `${prioritizedField.field}: ${highlightedValue}`;
+    // Case-insensitive literal matching; regex metacharacters in the query are escaped.
+    // Contact values are short, so the whole value is shown without an excerpt window
+    const matchPattern = new RegExp(escapeRegExp(searchText), 'gi');
+    return {
+      field: prioritizedField.field,
+      preview: messageSearchModal.buildSearchPreview(prioritizedField.value, matchPattern, Infinity),
+    };
   }
 
   displayContactResults(results, searchText) {
@@ -15145,9 +15481,8 @@ class SearchContactsModal {
 
       const avatarHtml = await getContactAvatarHtml(contact);
 
-      // Create match preview with label and highlighted matched value prioritizing exact and starts-with matches
+      // Match preview: "field: value" with the query highlighted, prioritizing exact and starts-with matches
       const matchPreview = this.createMatchPreview(contact, searchText);
-      const displayedName = getContactDisplayName(contact);
 
       contactElement.innerHTML = `
               <div class="chat-avatar">
@@ -15155,13 +15490,22 @@ class SearchContactsModal {
               </div>
               <div class="chat-content">
                   <div class="chat-header">
-                      <span class="chat-name">${displayedName}</span>
+                      <span class="chat-name"></span>
                   </div>
                   <div class="chat-message">
-                      <span class="match-label">${matchPreview}</span>
+                      <span class="match-label"></span>
                   </div>
               </div>
           `;
+
+      // Contact values are local or sender-supplied text. They are assigned as text nodes and
+      // <mark> elements so neither contact nor query text is ever parsed as HTML
+      contactElement.querySelector('.chat-name').textContent = getContactDisplayName(contact);
+      if (matchPreview) {
+        contactElement
+          .querySelector('.match-label')
+          .appendChild(messageSearchModal.renderSearchPreview(matchPreview.preview, `${matchPreview.field}: `));
+      }
 
       // Add click handler to show contact info
       contactElement.addEventListener('click', () => {
@@ -15414,6 +15758,7 @@ class AvatarEditModal {
    * and wire handlers to persist `useAvatar` for the contact.
    */
   async populateOptions() {
+    const owner = MediaCacheOwnership.getOwnerKey();
     const address = this.currentAddress;
     const contactThumb = this.avatarThumbContact;
     const uploadedThumb = this.avatarThumbUploaded;
@@ -15457,8 +15802,8 @@ class AvatarEditModal {
       return;
     } else {
       const contactObj = myData?.contacts?.[address] || null;
-      try { contactBlob = contactObj?.avatarId ? await contactAvatarCache.get(contactObj.avatarId) : null; } catch (e) { contactBlob = null; }
-      try { userBlob = contactObj?.mineAvatarId ? await contactAvatarCache.get(contactObj.mineAvatarId) : null; } catch (e) { userBlob = null; }
+      try { contactBlob = contactObj?.avatarId ? await contactAvatarCache.get(contactObj.avatarId, owner) : null; } catch (e) { contactBlob = null; }
+      try { userBlob = contactObj?.mineAvatarId ? await contactAvatarCache.get(contactObj.mineAvatarId, owner) : null; } catch (e) { userBlob = null; }
     }
 
     const contactUrl = contactBlob ? URL.createObjectURL(contactBlob) : null;
@@ -15639,15 +15984,6 @@ class AvatarEditModal {
    */
   async refreshPreview() {
     this.clearPreviewUrl();
-    let displayInfo;
-    if (this.isOwnAvatar) {
-      // For own avatar, use account data
-      displayInfo = { address: this.currentAddress, hasAvatar: myData?.account?.hasAvatar || false };
-    } else {
-      const contact = myData?.contacts?.[this.currentAddress];
-      displayInfo = contact ? createDisplayInfo(contact) : { address: this.currentAddress, hasAvatar: false };
-    }
-
     if (this.pendingBlob) {
       await this.setImageFromBlob(this.pendingBlob, true);
       return;
@@ -15658,7 +15994,8 @@ class AvatarEditModal {
     if (!this.isOwnAvatar) {
       try {
         const contactObj = myData?.contacts?.[this.currentAddress] || null;
-        const mineBlob = contactObj?.mineAvatarId ? await contactAvatarCache.get(contactObj.mineAvatarId) : null;
+        const avatarId = contactObj?.mineAvatarId;
+        const mineBlob = avatarId ? await contactAvatarCache.get(avatarId) : null;
         if (mineBlob) {
           await this.setImageFromBlob(mineBlob, false);
           return;
@@ -15692,7 +16029,7 @@ class AvatarEditModal {
     }
 
     // Fallback to identicon if no avatar blob for own avatar
-    const avatarHtml = await getContactAvatarHtml(displayInfo, 218);
+    const avatarHtml = generateIdenticon(this.currentAddress, 218);
     this.previewContainer.innerHTML = avatarHtml;
     this.enableTransform = false;
     this.updateZoomUI();
@@ -15815,6 +16152,7 @@ class AvatarEditModal {
       return;
     }
 
+    const owner = MediaCacheOwnership.getOwnerKey();
     try {
       if (this.isOwnAvatar) {
         // Update own avatar state
@@ -15862,7 +16200,7 @@ class AvatarEditModal {
         // Check whether a contact-sent avatar still exists
         let contactExists = false;
         try {
-          const contactBlob = contact.avatarId ? await contactAvatarCache.get(contact.avatarId) : null;
+          const contactBlob = contact.avatarId ? await contactAvatarCache.get(contact.avatarId, owner) : null;
           contactExists = !!contactBlob;
         } catch (e) {
           contactExists = false;
@@ -16108,6 +16446,7 @@ class AvatarEditModal {
     try {
       // Need an image source to save
       if (this.pendingBlob || this.activeImageBlob) {
+        const owner = MediaCacheOwnership.getOwnerKey();
         const sourceBlob = this.pendingBlob || this.activeImageBlob;
         const thumbnail = await this.exportCroppedThumbnail(sourceBlob);
 
@@ -16149,7 +16488,7 @@ class AvatarEditModal {
           const avatarId = result.id;
 
           // Save thumbnail to cache now that server operations succeeded (keyed by avatarId)
-          await contactAvatarCache.save(avatarId, thumbnail);
+          await contactAvatarCache.save(avatarId, thumbnail, owner);
 
           // Save id, key and secret in account
           myData.account.avatarId = avatarId;
@@ -16171,7 +16510,7 @@ class AvatarEditModal {
           contact.hasAvatar = true;
           // Save user's uploaded avatar under a generated id and reference it on the contact
           const mineId = bin2hex(generateRandomBytes(16));
-          await contactAvatarCache.save(mineId, thumbnail);
+          await contactAvatarCache.save(mineId, thumbnail, owner);
           contact.mineAvatarId = mineId;
           // Prefer the user's uploaded avatar for this contact
           myData.contacts ??= {};
@@ -16886,7 +17225,9 @@ function getTransactionTimestamp() {
 // Validator Modals
 
 class RemoveAccountModal {
-  constructor() {}
+  constructor() {
+    this.isRemoving = false;
+  }
 
   load() {
     // called when the DOM is loaded; can setup event handlers here
@@ -16922,30 +17263,48 @@ class RemoveAccountModal {
     }
   }
 
-  submit(username = myAccount.username) {
-    // called when the form is submitted
-    // Get network ID from network.js
+  async submit(username = myAccount.username) {
     const { netid } = network;
+    if (!await this.removeAccounts([{ username, netid }])) return;
 
-    // Get existing accounts
-    const existingAccounts = parse(localStorage.getItem('accounts') || '{"netids":{}}');
-
-    // Remove the account from the accounts object
-    const netidAccounts = existingAccounts.netids[netid];
-    if (netidAccounts && netidAccounts.usernames) {
-      delete netidAccounts.usernames[username];
-      this.removeSignInUsernameOrder(netidAccounts, username);
-      localStorage.setItem('accounts', stringify(existingAccounts));
-    }
-    // Remove the account data from localStorage
-    localStorage.removeItem(`${username}_${netid}`);
-
-    // Reload the page to redirect to welcome screen
-    clearMyData(); // need to delete this so that the reload does not save the data into localStore again
+    clearMyData(); // Prevent the reload from saving the removed account again.
     window.location.reload();
   }
 
-  removeAccount(username = null) {
+  async removeAccounts(accounts) {
+    if (this.isRemoving) return false;
+    this.isRemoving = true;
+    try {
+      const ownerKeys = accounts.map(({ username, netid }) => `${username}_${netid}`);
+      const results = await Promise.allSettled([
+        contactAvatarCache.removeOwners(ownerKeys),
+        thumbnailCache.removeOwners(ownerKeys),
+      ]);
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure) throw failure.reason;
+
+      // Read after cleanup so a concurrent account update is not overwritten.
+      const existingAccounts = parse(localStorage.getItem('accounts') || '{"netids":{}}');
+      for (const { username, netid } of accounts) {
+        const netidAccounts = existingAccounts.netids[netid];
+        if (netidAccounts?.usernames) {
+          delete netidAccounts.usernames[username];
+          this.removeSignInUsernameOrder(netidAccounts, username);
+        }
+        localStorage.removeItem(`${username}_${netid}`);
+      }
+      localStorage.setItem('accounts', stringify(existingAccounts));
+      return true;
+    } catch (error) {
+      console.error('Failed to remove account media:', error);
+      showToast('Account removal failed. Please try again to finish removing cached media.', 0, 'error');
+      return false;
+    } finally {
+      this.isRemoving = false;
+    }
+  }
+
+  async removeAccount(username = null) {
     // Username must be provided explicitly - when called from sign-in modal, myAccount is not yet available
     if (!username) {
       // if myAccount is available and removeAccountModal is open, use myAccount.username
@@ -16958,25 +17317,7 @@ class RemoveAccountModal {
     }
     const confirmed = confirm(`Are you sure you want to remove the account "${username}" from this device?`);
     if (!confirmed) return;
-    
-    const { netid } = network;
-
-    // Get existing accounts
-    const existingAccounts = parse(localStorage.getItem('accounts') || '{"netids":{}}');
-
-    // Remove the account from the accounts object
-    const netidAccounts = existingAccounts.netids[netid];
-    if (netidAccounts && netidAccounts.usernames) {
-      delete netidAccounts.usernames[username];
-      this.removeSignInUsernameOrder(netidAccounts, username);
-      localStorage.setItem('accounts', stringify(existingAccounts));
-    }
-    // Remove the account data from localStorage
-    localStorage.removeItem(`${username}_${netid}`);
-
-    // Reload the page to redirect to welcome screen
-    clearMyData(); // need to delete this so that the reload does not save the data into localStore again
-    window.location.reload();
+    await this.submit(username);
   }
 
   isActive() {
@@ -16991,7 +17332,9 @@ const removeAccountModal = new RemoveAccountModal();
 
 // Modal to remove multiple accounts at once from welcome screen
 class RemoveAccountsModal {
-  constructor() {}
+  constructor() {
+    this.isRemovingAll = false;
+  }
 
   load() {
     this.modal = document.getElementById('removeAccountsModal');
@@ -17195,43 +17538,44 @@ class RemoveAccountsModal {
     }, { once: true }); // attach once, inside we attach nested listeners via event bubbling
   }
 
-  handleSubmit() {
+  async handleSubmit() {
     const checked = this.listContainer.querySelectorAll('input[type="checkbox"]:checked');
     if (checked.length === 0) return;
     const confirmText = confirm(`Remove ${checked.length} selected account(s) from this device?`);
     if (!confirmText) return;
-    const accountsObj = parse(localStorage.getItem('accounts') || '{"netids":{}}');
-    checked.forEach(cb => {
-      const username = cb.dataset.username;
-      const netid = cb.dataset.netid;
-      // remove account data file
-      localStorage.removeItem(`${username}_${netid}`);
-      // remove from registry if present
-      if (accountsObj.netids[netid] && accountsObj.netids[netid].usernames && accountsObj.netids[netid].usernames[username]) {
-        delete accountsObj.netids[netid].usernames[username];
-        removeAccountModal.removeSignInUsernameOrder(accountsObj.netids[netid], username);
-      }
-    });
-    localStorage.setItem('accounts', stringify(accountsObj));
+    const accounts = Array.from(checked, (checkbox) => ({
+      username: checkbox.dataset.username,
+      netid: checkbox.dataset.netid,
+    }));
+    if (!await removeAccountModal.removeAccounts(accounts)) return;
     showToast('Selected accounts removed', 3000, 'success');
     this.close();
   }
 
-  handleRemoveAllAccounts() {
+  async handleRemoveAllAccounts() {
+    if (this.isRemovingAll) return;
     const confirmText = prompt(`WARNING: All accounts and data will be permanently removed from this device.\n\nType "REMOVE ALL" to confirm:`);
     if (confirmText !== "REMOVE ALL") {
       showToast('Remove all cancelled', 2000, 'warning');
       return;
     }
-    
-    // Clear all localStorage data
+    this.isRemovingAll = true;
+    const results = await Promise.allSettled([
+      contactAvatarCache.deleteDatabase(),
+      thumbnailCache.deleteDatabase(),
+    ]);
+    const failures = results.filter(result => result.status === 'rejected');
+    for (const { reason } of failures) {
+      console.warn('Failed to delete a media cache database:', reason);
+    }
+
     localStorage.clear();
-    
-    // Show success message
-    showToast('All data has been removed from this device', 3000, 'success');
-    
-    // Reload the page to redirect to welcome screen
     clearMyData();
+    if (failures.length === 0) {
+      showToast('All data has been removed from this device', 3000, 'success');
+    } else {
+      alert('All accounts were removed, but some cached media could not be cleared.');
+    }
     window.location.reload();
   }
 }
@@ -18685,10 +19029,12 @@ class RestoreAccountModal {
       }
     }
 
+    const acceptedOwnerKeys = [...restoredAccountKeys];
+
     // Import contact avatars if present in backup
     if (backupData._avatars && typeof backupData._avatars === 'object') {
       try {
-        await contactAvatarCache.importAll(backupData._avatars, overwrite);
+        await contactAvatarCache.importAll(backupData._avatars, overwrite, acceptedOwnerKeys);
       } catch (e) {
         console.warn('Failed to import avatars from backup:', e);
       }
@@ -18697,7 +19043,7 @@ class RestoreAccountModal {
     // Import message thumbnails if present in backup
     if (backupData._thumbnails && typeof backupData._thumbnails === 'object') {
       try {
-        await thumbnailCache.importAll(backupData._thumbnails, overwrite);
+        await thumbnailCache.importAll(backupData._thumbnails, overwrite, acceptedOwnerKeys);
       } catch (e) {
         console.warn('Failed to import thumbnails from backup:', e);
       }
@@ -22071,7 +22417,7 @@ class ChatModal {
     if (!Array.isArray(this.fileAttachments) || this.fileAttachments.length === 0) return;
 
     const removedAttachments = this.fileAttachments.splice(0, this.fileAttachments.length);
-    this.purgeImageCaches(removedAttachments);
+    void this.purgeAttachmentCaches(removedAttachments);
 
     if (deleteFromServer) {
       this.deleteAttachmentsFromServer(removedAttachments);
@@ -23424,9 +23770,6 @@ class ChatModal {
   /** Check the actual recipient and live LIB funds before an external payment. */
   async prepareEvmPaymentRecipient(resolution, account) {
     const address = normalizeAddress(resolution.address);
-    if (!myData.contacts[address]) {
-      throw new Error('Add this username to Contacts before sending an EVM payment.');
-    }
     const sorted = [longAddress(account.keys.address), longAddress(address)].sort();
     const chatId = hashBytes(sorted.join(''));
     const [recipientInfo, tollInfo, balanceInfo, paramsOk] = await Promise.all([
@@ -23455,7 +23798,9 @@ class ChatModal {
     const totalRequired = fee + toll;
     const available = BigInt(balanceInfo.balance);
     if (available < totalRequired) {
-      throw new Error(`Not enough LIB for the chat message. Required: ${big2str(totalRequired, 18)} LIB; available: ${big2str(available, 18)} LIB; add ${big2str(totalRequired - available, 18)} LIB.`);
+      const error = new Error(`Not enough LIB for the chat message. Required: ${big2str(totalRequired, 18)} LIB; available: ${big2str(available, 18)} LIB; add ${big2str(totalRequired - available, 18)} LIB.`);
+      error.recipientToll = toll;
+      throw error;
     }
     // Validate current encryption keys without mutating the saved contact.
     const publicKey = recipient.publicKey;
@@ -23465,7 +23810,7 @@ class ChatModal {
     }
     dhkeyCombined(account.keys.secret, publicKey, pqPublicKey);
     return {
-      address, username: resolution.username, toll: toll.toString(), totalRequired: totalRequired.toString(),
+      address, username: resolution.username, fee: fee.toString(), toll: toll.toString(), totalRequired: totalRequired.toString(),
       contactUpdates: {
         public: publicKey, pqPublic: pqPublicKey, toll: recipient.data.toll,
         tollUnit: recipient.data.tollUnit || 'LIB', tollRequiredToSend: required,
@@ -23473,18 +23818,28 @@ class ChatModal {
     };
   }
 
-  async prepareEvmPaymentMessage(record, account) {
+  async prepareEvmPaymentMessage(record, account, isCurrent = () => true) {
+    if (myAccount !== account || !isCurrent()) return false;
     if (record.kind !== 'outgoing') throw new Error('Only outgoing payments can send a chat message.');
     const payment = parseEvmTransferMessage(record.payment);
     if (!payment || payment.from !== `0x${normalizeAddress(account.keys.address)}`) throw new Error('Invalid payment sender.');
     const prepared = await this.prepareEvmPaymentRecipient({ address: payment.to, username: record.username }, account);
+    if (myAccount !== account || !isCurrent()) return false;
     const contact = myData.contacts[prepared.address];
-    if (!contact) throw new Error('Add this username to Contacts before sending an EVM payment.');
-    if (!contact.username && prepared.username) contact.username = prepared.username;
-    Object.assign(contact, prepared.contactUpdates);
+    if (!contact && (record.broadcastState !== 'not_started' || !prepared.username)) {
+      throw new Error('Add this username to Contacts before sending an EVM payment message.');
+    }
+
+    // Prepare the receipt with fresh keys before saving a first-time recipient as a Connection.
+    const { public: publicKey, pqPublic: pqPublicKey } = prepared.contactUpdates;
+    const cryptoContext = {
+      contact: contact || { friend: 2 },
+      ...dhkeyCombined(account.keys.secret, publicKey, pqPublicKey),
+    };
     const { payload, chatMessageObj, txid } = await this.buildEncryptedStructuredChatTx(
-      prepared.address, payment, BigInt(prepared.toll), account.keys,
+      prepared.address, payment, BigInt(prepared.toll), account.keys, cryptoContext,
     );
+    if (myAccount !== account || !isCurrent()) return false;
     // The last lookup or message builder can see a newer fee/toll than confirmation.
     const messageCost = chatMessageObj.amount + chatMessageObj.fee;
     if (messageCost > BigInt(record.messageCostLimit)) {
@@ -23495,6 +23850,15 @@ class ChatModal {
       if (!approved) return false;
       record.messageCostLimit = messageCost.toString();
     }
+    const savedContact = myData.contacts[prepared.address];
+    if (!savedContact) {
+      if (contact) throw new Error('The recipient was removed from Contacts. Review the payment again.');
+      createNewContact(prepared.address, prepared.username, 2);
+    }
+    const recipient = myData.contacts[prepared.address];
+    if (!recipient.username && prepared.username) recipient.username = prepared.username;
+    Object.assign(recipient, prepared.contactUpdates);
+
     record.attempt = { tx: chatMessageObj, txid, timestamp: payload.sent_timestamp };
     record.messageState = 'ready';
     saveEvmPayment(record);
@@ -23529,7 +23893,7 @@ class ChatModal {
     record.nextCheckAt = 0;
     this.upsertEvmPaymentCard(record);
     saveEvmPayment(record);
-    const response = await injectTx(tx, txid, account);
+    const response = await injectTx(tx, txid);
     const current = loadEvmPayments().find((item) => evmPaymentRecordId(item) === evmPaymentRecordId(record));
     record.messageState = current?.messageState === 'delivered' ? 'delivered'
       : response?.result?.success === true ? 'submitted'
@@ -24550,20 +24914,13 @@ class ChatModal {
    * @param {string} text - The draft message text to save
    */
   saveDraft(text) {
-    if (this.address && myData.contacts[this.address]) {
-      // Sanitize the text before saving
-      const sanitizedText = escapeHtml(text);
-      myData.contacts[this.address].draft = sanitizedText;
-      
-      // Save or clear reply state
-      this.saveReplyState(myData.contacts[this.address]);
-      
-      // Save or clear attachment state
-      this.saveAttachmentState(myData.contacts[this.address]);
+    const contact = this.address && myData.contacts[this.address];
+    if (!contact) return;
 
-      // Save or clear retry state
-      this.saveRetryState(myData.contacts[this.address]);
-    }
+    contact.draft = text;
+    this.saveReplyState(contact);
+    this.saveAttachmentState(contact);
+    this.saveRetryState(contact);
   }
 
   /**
@@ -24721,6 +25078,7 @@ class ChatModal {
 
     let loadingToastId;
     let thumbnailBlob = null;
+    const owner = MediaCacheOwnership.getOwnerKey();
     
     // Normalize file type (fallback to extension detection for missing MIME types)
     const normalizedType = this.getMimeTypeFromFilename(file.name, file.type);
@@ -24846,7 +25204,7 @@ class ChatModal {
             
             // Cache thumbnail if we generated one - use captured variable
             if (capturedThumbnailBlob && (isImage || isVideo)) {
-              thumbnailCache.save(attachmentUrl, capturedThumbnailBlob, file.type).catch(err => {
+              thumbnailCache.save(attachmentUrl, capturedThumbnailBlob, file.type, owner).catch(err => {
                 console.warn('Failed to cache thumbnail for attached file:', err);
               });
             }
@@ -25077,7 +25435,7 @@ class ChatModal {
   removeAttachment(index) {
     if (this.fileAttachments && index >= 0 && index < this.fileAttachments.length) {
       const removedFile = this.fileAttachments.splice(index, 1)[0];
-      this.purgeImageCaches([removedFile]);
+      void this.purgeAttachmentCaches([removedFile]);
       this.showAttachmentPreview(); // Refresh the preview
       showToast(`"${removedFile.name}" removed`, 2000, 'info');
 
@@ -25247,11 +25605,12 @@ class ChatModal {
     if (!url || url === '#') return false;
 
     try {
-      let thumbnailBlob = await thumbnailCache.get(url);
+      const owner = MediaCacheOwnership.getOwnerKey();
+      let thumbnailBlob = await thumbnailCache.get(url, owner);
       if (!thumbnailBlob && attachmentRow.dataset.pUrl) {
         const item = this.getMessageRecordFromRenderedChild(attachmentRow);
         thumbnailBlob = await this.decryptAttachmentToBlob(item, attachmentRow, attachmentRow.dataset.pUrl);
-        await thumbnailCache.save(url, thumbnailBlob, 'image/jpeg');
+        await thumbnailCache.save(url, thumbnailBlob, 'image/jpeg', owner);
       }
       if (!thumbnailBlob || !attachmentRow.isConnected) return false;
       return this.updateThumbnailInPlace(attachmentRow, thumbnailBlob);
@@ -25334,78 +25693,43 @@ class ChatModal {
     const fetchUrl = urlOverride || mainUrl;
     if (!mainUrl || mainUrl === '#') throw new Error('Missing attachment url');
 
+    const attachment = Array.isArray(item.xattach) ? item.xattach.find(candidate => candidate?.url === mainUrl) : null;
+    const key = await this.getAttachmentDecryptionKey(item, attachment);
+    const blobType = urlOverride ? 'image/jpeg' : (linkEl.dataset.type || 'application/octet-stream');
+    return this.downloadAttachmentBlob(fetchUrl, key, blobType, signal);
+  }
+
+  async getAttachmentDecryptionKey(item, attachment, address = this.address) {
     const isVoice = item.type === 'vm';
-    let dhkey;
-    
-    // 1) Get encryption key
-    if (isVoice) {
-      // Voice message: use audio keys from the message item (no encKey for voice messages)
-      const selfKey = item.audioSelfKey || item.selfKey;
-      const pqEncSharedKey = item.audioPqEncSharedKey || item.pqEncSharedKey;
-      
-      if (item.my) {
-        if (!selfKey) throw new Error('Missing selfKey for decrypt');
-        const password = myAccount.keys.secret + myAccount.keys.pqSeed;
-        dhkey = hex2bin(decryptData(selfKey, password, true));
-      } else {
-        if (!pqEncSharedKey) throw new Error('Missing pqEncSharedKey for decrypt');
-        const ok = await ensureContactKeys(this.address);
-        const senderPublicKey = myData.contacts[this.address]?.public;
-        if (!ok || !senderPublicKey) throw new Error(`No public key found for sender ${this.address}`);
-        const pqCipher = (typeof pqEncSharedKey === 'string') ? base642bin(pqEncSharedKey) : pqEncSharedKey;
-        dhkey = dhkeyCombined(
-          myAccount.keys.secret,
-          senderPublicKey,
-          myAccount.keys.pqSeed,
-          pqCipher
-        ).dhkey;
-      }
-    } else {
-      // Attachment: look up attachment entry by main url
-      const att = Array.isArray(item.xattach) ? item.xattach.find((a) => a?.url === mainUrl) : null;
-      if (!att) throw new Error('Attachment entry not found');
-      
-      // Use encKey if available (new attachments), otherwise fall back to DH-derived keys (migrated/legacy)
-      if (att.encKey) {
-        dhkey = base642bin(att.encKey);
-      } else {
-        const selfKey = att.selfKey;
-        const pqEncSharedKey = att.pqEncSharedKey;
-        
-        if (item.my) {
-          if (!selfKey) throw new Error('Missing selfKey for decrypt');
-          const password = myAccount.keys.secret + myAccount.keys.pqSeed;
-          dhkey = hex2bin(decryptData(selfKey, password, true));
-        } else {
-          if (!pqEncSharedKey) throw new Error('Missing pqEncSharedKey for decrypt');
-          const ok = await ensureContactKeys(this.address);
-          const senderPublicKey = myData.contacts[this.address]?.public;
-          if (!ok || !senderPublicKey) throw new Error(`No public key found for sender ${this.address}`);
-          const pqCipher = (typeof pqEncSharedKey === 'string') ? base642bin(pqEncSharedKey) : pqEncSharedKey;
-          dhkey = dhkeyCombined(
-            myAccount.keys.secret,
-            senderPublicKey,
-            myAccount.keys.pqSeed,
-            pqCipher
-          ).dhkey;
-        }
-      }
+    if (!isVoice) {
+      if (!attachment) throw new Error('Attachment entry not found');
+      if (attachment.encKey) return base642bin(attachment.encKey);
     }
 
-    // 2) Download encrypted bytes (use fetchUrl which may be pUrl or main url)
-    const res = await fetch(fetchUrl, { signal });
+    const account = myAccount;
+    const { secret, pqSeed } = account.keys;
+    if (item.my) {
+      const selfKey = isVoice ? item.audioSelfKey || item.selfKey : attachment.selfKey;
+      if (!selfKey) throw new Error('Missing selfKey for decrypt');
+      return hex2bin(decryptData(selfKey, secret + pqSeed, true));
+    }
+
+    const pqEncSharedKey = isVoice ? item.audioPqEncSharedKey || item.pqEncSharedKey : attachment.pqEncSharedKey;
+    if (!pqEncSharedKey) throw new Error('Missing pqEncSharedKey for decrypt');
+    const ok = await ensureContactKeys(address);
+    const senderPublicKey = myAccount === account && myData?.contacts?.[address]?.public;
+    if (!ok || !senderPublicKey) throw new Error(`No public key found for sender ${address}`);
+    const pqCipher = typeof pqEncSharedKey === 'string' ? base642bin(pqEncSharedKey) : pqEncSharedKey;
+    return dhkeyCombined(secret, senderPublicKey, pqSeed, pqCipher).dhkey;
+  }
+
+  async downloadAttachmentBlob(url, key, type, signal = this.abortController.signal) {
+    const res = await fetch(url, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const cipherBin = new Uint8Array(await res.arrayBuffer());
-
-    // 3) Decrypt
-    const cipherB64 = bin2base64(cipherBin);
-    const plainB64 = decryptChacha(dhkey, cipherB64);
+    const plainB64 = decryptChacha(key, bin2base64(cipherBin));
     if (!plainB64) throw new Error('decryptChacha returned null');
-    const clearBin = base642bin(plainB64);
-
-    // 4) Blob - use image/jpeg for thumbnails (urlOverride), otherwise use original type
-    const blobType = urlOverride ? 'image/jpeg' : (linkEl.dataset.type || 'application/octet-stream');
-    return new Blob([clearBin], { type: blobType });
+    return new Blob([base642bin(plainB64)], { type });
   }
 
   /**
@@ -25434,51 +25758,47 @@ class ChatModal {
   }
 
   /**
-   * Resolves image metadata from the backing message record.
-   * The URL is used for fetching; caches derive a hostname-independent attachment ID.
+   * Uses the full-media cache for regular chat images and videos.
    * @param {Object} item - message containing the attachment metadata
    * @param {HTMLElement} linkEl - rendered attachment row
-   * @returns {{url: string, type: string}}
-   */
-  getFullImageAttachment(item, linkEl) {
-    const attachmentUrl = linkEl?.dataset?.url;
-    const attachment = Array.isArray(item?.xattach)
-      ? item.xattach.find(candidate => candidate?.url === attachmentUrl)
-      : null;
-
-    assert(attachment, 'Image attachment entry not found');
-    assert(attachment.type?.startsWith('image/'), 'Full-image cache accepts only image attachments');
-
-    return {
-      url: attachment.url,
-      type: attachment.type,
-    };
-  }
-
-  /**
-   * Gets the decrypted full image from IndexedDB, downloading it on a cache miss.
-   * @param {Object} item - message containing the attachment metadata and keys
-   * @param {HTMLElement} linkEl - rendered attachment row
+   * @param {AbortSignal} [signal] - the video viewer's current open request
    * @returns {Promise<Blob>}
    */
-  async getFullImageBlob(item, linkEl) {
-    const attachment = this.getFullImageAttachment(item, linkEl);
-    return fullImageCache.getOrCache({
+  async getAttachmentBlob(item, linkEl, signal = this.abortController.signal) {
+    const url = linkEl.dataset.url;
+    if (!url || url === '#') throw new Error('Missing attachment url');
+    const attachment = item.type !== 'vm' && Array.isArray(item.xattach)
+      ? item.xattach.find(candidate => candidate?.url === url)
+      : null;
+    let downloadAndDecrypt = () => this.decryptAttachmentToBlob(item, linkEl, null, signal);
+    if (!FullMediaCache.supportsMimeType(attachment?.type)) return downloadAndDecrypt();
+
+    const account = myAccount;
+    let keyFingerprint;
+    const mimeType = normalizeMimeType(attachment.type);
+    if (mimeType.startsWith('video/')) {
+      const key = await this.getAttachmentDecryptionKey(item, attachment);
+      if (key.length !== 32) throw new Error('Invalid video decryption key');
+      keyFingerprint = hashBytes(key);
+      downloadAndDecrypt = () => this.downloadAttachmentBlob(url, key, mimeType, signal);
+    }
+    return fullMediaCache.getOrCache({
       attachment,
-      downloadAndDecrypt: () => this.decryptAttachmentToBlob(item, linkEl),
-      shouldCache: () => Array.isArray(item?.xattach)
-        && item.xattach.some(candidate => candidate?.url === attachment.url),
+      keyFingerprint,
+      downloadAndDecrypt,
+      shouldCache: () => myAccount === account && !signal?.aborted && !isDeleted(item)
+        && !removeAccountModal.isRemoving && !removeAccountsModal.isRemovingAll
+        && Array.isArray(item.xattach) && item.xattach.includes(attachment),
     });
   }
 
   async handleAttachmentDownload(item, linkEl) {
     let loadingToastId;
     try {
+      const owner = MediaCacheOwnership.getOwnerKey();
       const isImage = item.type !== 'vm' && (linkEl.dataset.type || '').startsWith('image/');
-      loadingToastId = showToast(isImage ? 'Preparing image...' : 'Decrypting attachment...', 0, 'loading');
-      const blob = isImage
-        ? await this.getFullImageBlob(item, linkEl)
-        : await this.decryptAttachmentToBlob(item, linkEl);
+      loadingToastId = showToast(isImage ? 'Preparing image...' : 'Preparing attachment...', 0, 'loading');
+      const blob = await this.getAttachmentBlob(item, linkEl);
       const filename = decodeURIComponent(linkEl.dataset.name || 'download');
       const safePreviewMime = await getSafeAttachmentPreviewMime(blob);
       const safePreviewBlob = safePreviewMime
@@ -25495,11 +25815,11 @@ class ChatModal {
           : thumbnailCache.extractVideoThumbnail(safePreviewBlob);
         
         thumbnailPromise
-          .then(thumbnail => thumbnailCache.save(attachmentUrl, thumbnail, safePreviewMime))
+          .then(thumbnail => thumbnailCache.save(attachmentUrl, thumbnail, safePreviewMime, owner))
           .then(async () => {
             // Update thumbnail in place
             if (attachmentRow) {
-              const thumbnailBlob = await thumbnailCache.get(attachmentUrl);
+              const thumbnailBlob = await thumbnailCache.get(attachmentUrl, owner);
               if (thumbnailBlob) {
                 await this.updateThumbnailInPlace(attachmentRow, thumbnailBlob);
               }
@@ -26442,25 +26762,37 @@ class ChatModal {
   }
 
   /**
-   * Removes cached thumbnails and full images for image attachments.
+   * Removes cached thumbnails and full media for deleted attachments.
    * Safe to call even if cached records don't exist.
-   * @param {any} xattach
+   * @param {Array} xattach
+   * @param {Object} [item] - The message, or own attachment context for a draft
+   * @param {string} [address] - The contact whose keys decrypt an incoming attachment
    */
-  purgeImageCaches(xattach) {
+  async purgeAttachmentCaches(xattach, item = { my: true }, address = this.address) {
     if (!Array.isArray(xattach) || !xattach.length) return;
 
-    for (const attachment of xattach) {
+    await Promise.all(xattach.map(async attachment => {
       const url = attachment?.url;
-      const type = attachment?.type;
-      if (!url || url === '#' || typeof type !== 'string' || !type.startsWith('image/')) continue;
+      const mimeType = normalizeMimeType(attachment?.type);
+      if (!url || url === '#' || !FullMediaCache.supportsMimeType(mimeType)) return;
 
-      void thumbnailCache.delete(url).catch((error) => {
+      const thumbnailRemoval = thumbnailCache.delete(url).catch((error) => {
         console.warn('Failed to delete thumbnail:', error);
       });
-      void fullImageCache.delete(url).catch((error) => {
-        console.warn('Failed to delete full image:', error);
-      });
-    }
+
+      try {
+        let keyFingerprint;
+        if (mimeType.startsWith('video/')) {
+          const key = await this.getAttachmentDecryptionKey(item, attachment, address);
+          if (key.length !== 32) throw new Error('Invalid video decryption key');
+          keyFingerprint = hashBytes(key);
+        }
+        await fullMediaCache.delete(url, mimeType, keyFingerprint);
+      } catch (error) {
+        console.warn('Failed to delete cached attachment:', error);
+      }
+      await thumbnailRemoval;
+    }));
   }
 
   /**
@@ -27019,7 +27351,7 @@ class ChatModal {
         void this.openMediaAttachment(row);
         break;
       case 'save':
-        void this.saveImageAttachment(row);
+        void this.saveAttachment(row);
         break;
       case 'share':
         shareAttachmentModal.open(messageEl);
@@ -27089,7 +27421,7 @@ class ChatModal {
   }
 
   /**
-   * Opens media promptly, preserving the full-image cache and downloading videos anew.
+   * Opens media promptly, using a cached full-size Blob when available.
    * @param {HTMLElement} attachmentRow
    */
   async openMediaAttachment(attachmentRow) {
@@ -27105,9 +27437,8 @@ class ChatModal {
       requestId = fullImageModal.openLoading(filename, kind, attachmentRow.dataset.thumbnailUrl || '');
       if (requestId === null) return;
 
-      const blob = kind === 'image'
-        ? await this.getFullImageBlob(item, attachmentRow)
-        : await this.decryptAttachmentToBlob(item, attachmentRow, null, fullImageModal.abortController.signal);
+      const signal = kind === 'video' ? fullImageModal.abortController.signal : undefined;
+      const blob = await this.getAttachmentBlob(item, attachmentRow, signal);
       if (!fullImageModal.isCurrentRequest(requestId)) return;
       const safePreviewMime = await getSafeAttachmentPreviewMime(blob);
       if (!fullImageModal.isCurrentRequest(requestId)) return;
@@ -27133,14 +27464,12 @@ class ChatModal {
   }
 
   /**
-   * Save an image attachment using the cache-first download/decrypt flow.
+   * Save an attachment from the context menu.
    * @param {HTMLElement} attachmentRow
    */
-  async saveImageAttachment(attachmentRow) {
-    // Reuse normal attachment download flow (cache/decrypt + download)
+  async saveAttachment(attachmentRow) {
     const { item } = this.getAttachmentContextFromRow(attachmentRow);
 
-    // Concurent download prevention
     if (this.attachmentDownloadInProgress) return;
     this.attachmentDownloadInProgress = true;
     try {
@@ -27961,8 +28290,8 @@ class ChatModal {
           DELETED_MESSAGE_LOCAL_TEXT
         );
       }
-      // Remove cached image data for attachments, then remove attachments
-      this.purgeImageCaches(message.xattach);
+      // Remove cached media for attachments, then remove attachments
+      void this.purgeAttachmentCaches(message.xattach, message);
       delete message.xattach;
       purgeContactReactionsForTarget(contact, message.txid);
       purgePendingReactionsForTarget(this.address, message.txid);
@@ -28376,7 +28705,7 @@ class ChatModal {
       const randomHex = bin2hex(randomBytes).slice(0, 20);
 
       // Create the Meet URL
-      const callUrl = `https://meet.liberdus.com/${randomHex}`;
+      const callUrl = `${network.meetUrl.replace(/\/+$/, '')}/${randomHex}`;
       
       // Send a call message to the contact with callTime (0 or future timestamp)
       const success = await this.sendCallMessage(callUrl, chosenCallTime);
@@ -29071,16 +29400,20 @@ class FullImageModal {
     this.objectUrl = null;
     this.requestId = 0;
     this.abortController = null;
+    this.rotationDegrees = 0;
     this.scale = 1;
     this.translateX = 0;
     this.translateY = 0;
     this.touchGesture = null;
     this.dragPointerId = null;
+    this.chromeHideTimer = null;
   }
 
   load() {
     this.modal = document.getElementById('fullImageModal');
+    this.header = this.modal.querySelector('.modal-header');
     this.closeButton = document.getElementById('closeFullImageModal');
+    this.rotateButton = document.getElementById('fullImageRotate');
     this.title = document.getElementById('fullImageModalTitle');
     this.viewer = document.getElementById('fullImageViewer');
     this.loading = document.getElementById('fullImageLoading');
@@ -29092,12 +29425,13 @@ class FullImageModal {
     this.zoomInButton = document.getElementById('fullImageZoomIn');
     this.zoomOutButton = document.getElementById('fullImageZoomOut');
 
-    assert(this.modal && this.closeButton && this.title && this.viewer && this.loading && this.loadingText
-      && this.error && this.image && this.video
+    assert(this.modal && this.header && this.closeButton && this.rotateButton && this.title
+      && this.viewer && this.loading && this.loadingText && this.error && this.image && this.video
       && this.zoomControls && this.zoomInButton && this.zoomOutButton,
       'Media modal elements are required');
 
     this.closeButton.addEventListener('click', () => this.close());
+    this.rotateButton.addEventListener('click', () => this.rotateMedia());
     this.zoomInButton.addEventListener('click', () => this.zoomBy(0.5));
     this.zoomOutButton.addEventListener('click', () => this.zoomBy(-0.5));
     this.viewer.addEventListener('touchstart', (event) => this.handleTouchStart(event), { passive: false });
@@ -29108,12 +29442,52 @@ class FullImageModal {
     this.viewer.addEventListener('pointermove', (event) => this.handlePointerMove(event));
     this.viewer.addEventListener('pointerup', (event) => this.handlePointerEnd(event));
     this.viewer.addEventListener('pointercancel', (event) => this.handlePointerEnd(event));
+    for (const type of ['pointermove', 'pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchend', 'touchcancel']) {
+      this.modal.addEventListener(type, () => this.revealChrome(), { passive: true });
+    }
+    for (const controls of [this.header, this.zoomControls]) {
+      controls.addEventListener('pointerenter', () => this.revealChrome());
+      controls.addEventListener('pointerleave', () => this.revealChrome());
+    }
+    this.modal.addEventListener('focusin', () => {
+      if (this.modal.querySelector(':focus-visible')) this.revealChrome();
+    });
+    // Native video controls can blur themselves when they auto-hide.
+    this.modal.addEventListener('focusout', () => queueMicrotask(() => this.scheduleChromeHide()));
     document.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape' || !this.modal.classList.contains('active')) return;
+      if (!this.modal.classList.contains('active')) return;
+      if (event.key !== 'Escape') {
+        this.revealChrome();
+        return;
+      }
       event.preventDefault();
       this.close();
     });
     this.updateZoomControls();
+  }
+
+  canHideChrome() {
+    const controlsHovered = window.matchMedia('(hover: hover)').matches
+      && (this.header.matches(':hover') || this.zoomControls.matches(':hover'));
+    return this.modal.classList.contains('active') && this.loading.hidden && this.error.hidden
+      && this.touchGesture === null && this.dragPointerId === null
+      && !controlsHovered && !this.modal.querySelector(':focus-visible');
+  }
+
+  revealChrome() {
+    this.modal.classList.remove('is-chrome-hidden');
+    this.scheduleChromeHide();
+  }
+
+  scheduleChromeHide() {
+    clearTimeout(this.chromeHideTimer);
+    this.chromeHideTimer = null;
+    if (this.modal.classList.contains('is-chrome-hidden') || !this.canHideChrome()) return;
+
+    this.chromeHideTimer = setTimeout(() => {
+      this.chromeHideTimer = null;
+      if (this.canHideChrome()) this.modal.classList.add('is-chrome-hidden');
+    }, 3000);
   }
 
   /** @returns {number | null} Identifies this open until close or replacement. */
@@ -29149,8 +29523,10 @@ class FullImageModal {
       if (!this.isCurrentRequest(requestId) || this.objectUrl !== objectUrl) return;
       this.loading.hidden = true;
       this.image.hidden = false;
+      this.rotateButton.hidden = false;
       this.viewer.setAttribute('aria-busy', 'false');
       this.updateZoomControls();
+      this.revealChrome();
     };
     this.image.onerror = () => {
       this.showError('Unable to display image.', requestId);
@@ -29164,7 +29540,9 @@ class FullImageModal {
     this.video.onloadedmetadata = () => {
       if (!this.isCurrentRequest(requestId)) return;
       this.loading.hidden = true;
+      this.rotateButton.hidden = false;
       this.viewer.setAttribute('aria-busy', 'false');
+      this.revealChrome();
     };
     this.video.onerror = () => {
       this.showError('Unable to play this video on this device.', requestId);
@@ -29300,17 +29678,20 @@ class FullImageModal {
   }
 
   constrainTranslation() {
-    const maxX = Math.max(0, (this.image.clientWidth * this.scale - this.viewer.clientWidth) / 2);
-    const maxY = Math.max(0, (this.image.clientHeight * this.scale - this.viewer.clientHeight) / 2);
+    const sideways = this.rotationDegrees % 180 !== 0;
+    const width = sideways ? this.image.clientHeight : this.image.clientWidth;
+    const height = sideways ? this.image.clientWidth : this.image.clientHeight;
+    const maxX = Math.max(0, (width * this.scale - this.viewer.clientWidth) / 2);
+    const maxY = Math.max(0, (height * this.scale - this.viewer.clientHeight) / 2);
     this.translateX = Math.min(maxX, Math.max(-maxX, this.translateX));
     this.translateY = Math.min(maxY, Math.max(-maxY, this.translateY));
   }
 
   applyTransform() {
-    this.image.style.transform = this.scale === 1
-      ? ''
-      : `translate3d(${this.translateX}px, ${this.translateY}px, 0) scale(${this.scale})`;
-    this.viewer.classList.toggle('is-zoomed', this.scale > 1);
+    const zoomed = this.scale > 1;
+    this.image.style.translate = zoomed ? `${this.translateX}px ${this.translateY}px` : '';
+    this.image.style.scale = zoomed ? this.scale : '';
+    this.viewer.classList.toggle('is-zoomed', zoomed);
     this.updateZoomControls();
   }
 
@@ -29335,17 +29716,34 @@ class FullImageModal {
     this.zoomOutButton.disabled = imageUnavailable || this.scale <= 1;
   }
 
-  resetTransform() {
+  rotateMedia() {
+    if (this.rotateButton.hidden) return;
+
+    this.setRotation((this.rotationDegrees + 90) % 360);
+    this.resetZoom();
+  }
+
+  setRotation(degrees) {
+    this.rotationDegrees = degrees;
+    this.viewer.style.setProperty('--media-rotation', `${degrees}deg`);
+    this.viewer.classList.toggle('is-rotated', degrees !== 0);
+    this.viewer.classList.toggle('is-sideways', degrees % 180 !== 0);
+  }
+
+  resetZoom() {
     this.scale = 1;
     this.translateX = 0;
     this.translateY = 0;
     this.touchGesture = null;
     this.dragPointerId = null;
-    if (this.image) this.image.style.transform = '';
-    this.viewer?.classList.remove('is-zoomed', 'is-dragging');
+    this.viewer.classList.remove('is-dragging');
+    this.applyTransform();
   }
 
   clearMedia() {
+    clearTimeout(this.chromeHideTimer);
+    this.chromeHideTimer = null;
+    this.modal?.classList.remove('is-chrome-hidden');
     this.abortController?.abort();
     this.abortController = null;
     if (!this.image) return;
@@ -29357,7 +29755,6 @@ class FullImageModal {
     this.video.removeAttribute('poster');
     this.video.load();
     this.video.hidden = true;
-    this.resetTransform();
     this.image.onload = null;
     this.image.onerror = null;
     this.image.removeAttribute('src');
@@ -29366,7 +29763,9 @@ class FullImageModal {
     this.error.hidden = true;
     this.viewer.setAttribute('aria-busy', 'false');
     this.image.alt = '';
-    this.updateZoomControls();
+    this.rotateButton.hidden = true;
+    this.setRotation(0);
+    this.resetZoom();
 
     if (this.objectUrl) {
       URL.revokeObjectURL(this.objectUrl);
@@ -30487,6 +30886,7 @@ class ShareContactsModal {
    * @returns {Promise<string>} Avatar HTML
    */
   async getContactAvatarHtmlForShare(contact, size = 40) {
+    const owner = MediaCacheOwnership.getOwnerKey();
     const address = contact?.address;
     if (!address) return generateIdenticon('', size);
 
@@ -30495,13 +30895,13 @@ class ShareContactsModal {
     try {
       // Priority 1: Contact's provided avatar
       if (contact?.avatarId) {
-        const url = await contactAvatarCache.getBlobUrl(contact.avatarId);
+        const url = await contactAvatarCache.getBlobUrl(contact.avatarId, owner);
         if (url) return makeImg(url);
       }
 
       // Priority 2: User-selected avatar for this contact
       if (contact?.mineAvatarId) {
-        const url = await contactAvatarCache.getBlobUrl(contact.mineAvatarId);
+        const url = await contactAvatarCache.getBlobUrl(contact.mineAvatarId, owner);
         if (url) return makeImg(url);
       }
     } catch (err) {
@@ -30648,17 +31048,17 @@ class ShareContactsModal {
    * @param {Object} contact - Contact object
    * @returns {Promise<Blob|null>} Avatar blob or null if not available
    */
-  async getContactAvatarBlobForShare(contact) {
+  async getContactAvatarBlobForShare(contact, owner) {
     try {
       // Priority 1: Contact's provided avatar
       if (contact?.avatarId) {
-        const blob = await contactAvatarCache.get(contact.avatarId);
+        const blob = await contactAvatarCache.get(contact.avatarId, owner);
         if (blob) return blob;
       }
 
       // Priority 2: User-selected avatar for this contact
       if (contact?.mineAvatarId) {
-        const blob = await contactAvatarCache.get(contact.mineAvatarId);
+        const blob = await contactAvatarCache.get(contact.mineAvatarId, owner);
         if (blob) return blob;
       }
     } catch (err) {
@@ -30675,6 +31075,8 @@ class ShareContactsModal {
    */
   async generateVcfContent() {
     const vcards = [];
+    const contacts = Array.from(this.selectedContacts, address => myData.contacts[address]).filter(Boolean);
+    const owner = MediaCacheOwnership.getOwnerKey();
 
     // First card contains X-LIBERDUS-NETID
     vcards.push([
@@ -30685,10 +31087,7 @@ class ShareContactsModal {
     ].join('\r\n'));
 
     // Generate vCard for each selected contact
-    for (const address of this.selectedContacts) {
-      const contact = myData.contacts[address];
-      if (!contact) continue;
-
+    for (const contact of contacts) {
       const lines = [
         'BEGIN:VCARD',
         'VERSION:3.0',
@@ -30703,7 +31102,7 @@ class ShareContactsModal {
       }
 
       // PHOTO - base64 of avatar blob
-      const avatarBlob = await this.getContactAvatarBlobForShare(contact);
+      const avatarBlob = await this.getContactAvatarBlobForShare(contact, owner);
       if (avatarBlob) {
         const base64 = await contactAvatarCache.blobToBase64(avatarBlob);
         if (base64) {
@@ -31375,6 +31774,7 @@ class ImportContactsModal {
 
     this.doneButton.classList.add('loading');
     try {
+      const owner = MediaCacheOwnership.getOwnerKey();
       let importedCount = 0;
       let failedCount = 0;
       const failedContacts = [];
@@ -31444,7 +31844,7 @@ class ImportContactsModal {
               const mimeType = parsedContact.photoType === 'png' ? 'image/png' : 'image/jpeg';
               const avatarBlob = contactAvatarCache.base64ToBlob(parsedContact.photoBase64, mimeType);
               const mineId = bin2hex(generateRandomBytes(16));
-              await contactAvatarCache.save(mineId, avatarBlob);
+              await contactAvatarCache.save(mineId, avatarBlob, owner);
               existingContact.mineAvatarId = mineId;
               existingContact.hasAvatar = true;
               existingContact.useAvatar = 'mine';
@@ -31494,7 +31894,7 @@ class ImportContactsModal {
             const avatarBlob = contactAvatarCache.base64ToBlob(parsedContact.photoBase64, mimeType);
             // Generate ID like user-uploaded avatars for consistency
             const mineId = bin2hex(generateRandomBytes(16));
-            await contactAvatarCache.save(mineId, avatarBlob);
+            await contactAvatarCache.save(mineId, avatarBlob, owner);
             contactRecord.mineAvatarId = mineId;
             contactRecord.hasAvatar = true;
             contactRecord.useAvatar = 'mine';
@@ -33714,6 +34114,8 @@ const createAccountModal = new CreateAccountModal();
  * @returns {void}
  */
 class SendAssetFormModal {
+  static USERNAME_PATTERN = /^[a-z0-9]{3,15}$/i;
+
   constructor() {
     this.session = null;
     this.username = null;
@@ -33758,9 +34160,21 @@ class SendAssetFormModal {
       () => this.refreshSendButtonDisabledState(),
       (e) => this.handleSendFormSubmit(e)
     ));
-    // TODO: need to add check that it's not a back/delete key
-    this.usernameInput.addEventListener('input', async (e) => {
-      this.handleSendToAddressInput(e);
+    this.usernameInput.addEventListener('input', (event) => {
+      const value = this.usernameInput.value;
+      if (!event.isTrusted && !isValidEthereumAddress(value.trim())) {
+        this.usernameInput.value = normalizeUsername(value);
+      }
+      this.handleSendToAddressInput();
+    });
+    this.contactAutocomplete = new ContactAutocomplete({
+      input: this.usernameInput,
+      list: document.getElementById('sendToAddressSuggestions'),
+      getContacts: () => this.getAutocompleteContacts(),
+      onSelect: (contact) => {
+        this.usernameInput.value = contact.username;
+        this.handleSendToAddressInput(contact.address);
+      },
     });
 
     this.availableBalance.addEventListener('click', this.fillAmount.bind(this));
@@ -33795,9 +34209,10 @@ class SendAssetFormModal {
 
   /**
    * Opens the send asset modal
-   * @returns {Promise<void>}
+   * @param {{input: string, expectedAddress?: string}} [recipientToRestore]
+   * @returns {Promise<boolean>}
    */
-  async open() {
+  async open(recipientToRestore) {
     if (this.isActive()) return false;
     this.reset();
     this.memoInput.setCustomValidity('');
@@ -33814,7 +34229,10 @@ class SendAssetFormModal {
 
     if (!openModal(this.modal)) return false;
     const session = this.session = { account: myAccount };
-    if (this.username) {
+    if (recipientToRestore) {
+      this.usernameInput.value = recipientToRestore.input;
+      this.handleSendToAddressInput(recipientToRestore.expectedAddress);
+    } else if (this.username) {
       this.usernameInput.value = this.username;
       this.usernameInput.dispatchEvent(new Event('input'));
       this.username = null;
@@ -33857,6 +34275,7 @@ class SendAssetFormModal {
 
   reset() {
     sendAssetConfirmModal.close();
+    this.contactAutocomplete?.close();
     this.session = null;
     clearTimeout(this.sendAssetFormModalCheckTimeout);
     this.sendAssetFormModalCheckTimeout = null;
@@ -33878,19 +34297,32 @@ class SendAssetFormModal {
     this.username = null;
   }
 
-  /**
-   * Invoked when the user types in the username input
-   * It will check if the username is too short, available, or not available
-   * @param {Event} e - The event object
-   * @returns {void}
-   */
-  async handleSendToAddressInput(e) {
-    this.submitButton.disabled = true;
+  getAutocompleteContacts() {
+    if (!this.session || !myAccount) return [];
+    const ownAddress = normalizeAddress(myAccount.keys.address);
+    return Object.entries(myData?.contacts || {})
+      .filter(([address, contact]) => /^[a-f0-9]{40}$/i.test(address)
+        && address.toLowerCase() !== ownAddress && !isFaucetAddress(address)
+        && typeof contact?.username === 'string' && SendAssetFormModal.USERNAME_PATTERN.test(contact.username))
+      .map(([address, contact]) => ({
+        ...contact,
+        address,
+        username: contact.username.toLowerCase(),
+        displayName: getContactDisplayName(contact),
+      }));
+  }
+
+  async handleSendToAddressInput(expectedAddress) {
     const session = this.session;
-    const rawInput = e.target.value.trim();
-    this.foundAddressObject = { address: null };
+    if (!this.isCurrentSession(session)) return;
+    this.submitButton.disabled = true;
+    const rawInput = this.usernameInput.value;
+    const unresolvedRecipient = this.foundAddressObject = { address: null, input: rawInput, expectedAddress };
     this.tollInfo = {};
     this.needTollInfo = false;
+    this.clearFormInfo();
+    const usernameAvailable = this.usernameAvailable;
+    usernameAvailable.style.display = 'none';
 
     // Cancel any queued lookup before handling a new recipient value.
     if (this.sendAssetFormModalCheckTimeout) {
@@ -33898,37 +34330,39 @@ class SendAssetFormModal {
       this.sendAssetFormModalCheckTimeout = null;
     }
 
-    if (isValidEthereumAddress(rawInput)) {
-      this.clearFormInfo();
-      this.usernameAvailable.textContent = 'address not supported';
-      this.usernameAvailable.style.color = '#dc3545';
-      this.usernameAvailable.style.display = 'inline';
-      await this.refreshSendButtonDisabledState();
-      return;
-    }
-
-    // Check availability on input changes
-    const username = normalizeUsername(e.target.value);
-    e.target.value = username;
-    const usernameAvailable = this.usernameAvailable;
-
-    this.clearFormInfo();
-
-    // Check if username is too short
-    if (username.length < 3) {
-      usernameAvailable.textContent = 'too short';
+    if (isValidEthereumAddress(rawInput.trim())) {
+      usernameAvailable.textContent = 'address not supported';
       usernameAvailable.style.color = '#dc3545';
       usernameAvailable.style.display = 'inline';
       await this.refreshSendButtonDisabledState();
       return;
     }
 
-    // Check network availability
+    // Preserve the query in the field and resolve only username-shaped input.
+    const username = rawInput.trim().replace(/^@/, '').toLowerCase();
+    if (!SendAssetFormModal.USERNAME_PATTERN.test(username)) {
+      if (/^[a-z0-9]{1,2}$/.test(username)) {
+        usernameAvailable.textContent = 'too short';
+        usernameAvailable.style.color = '#dc3545';
+        usernameAvailable.style.display = 'inline';
+      }
+      await this.refreshSendButtonDisabledState();
+      return;
+    }
+
     this.sendAssetFormModalCheckTimeout = setTimeout(async () => {
-      const found = { address: null };
+      this.sendAssetFormModalCheckTimeout = null;
+      const found = { ...unresolvedRecipient, username };
       if (!this.isCurrentSession(session)) return;
       const taken = await checkUsernameAvailability(username, session.account.keys.address, found);
-      if (!this.isCurrentSession(session) || this.usernameInput.value !== username) return;
+      if (!this.isCurrentSession(session) || this.foundAddressObject !== unresolvedRecipient
+        || this.usernameInput.value !== rawInput) return;
+      if (expectedAddress && taken === 'taken' && normalizeAddress(found.address) !== normalizeAddress(expectedAddress)) {
+        usernameAvailable.textContent = 'contact changed';
+        usernameAvailable.style.color = '#dc3545';
+        usernameAvailable.style.display = 'inline';
+        return;
+      }
       this.foundAddressObject = found;
       if (taken == 'taken') {
         usernameAvailable.textContent = 'found';
@@ -34080,6 +34514,7 @@ class SendAssetFormModal {
    */
   async handleSendFormSubmit(event) {
     event.preventDefault();
+    this.contactAutocomplete.close();
     const session = this.session;
     const recipient = this.foundAddressObject;
 
@@ -34098,14 +34533,14 @@ class SendAssetFormModal {
     const confirmButton = sendAssetConfirmModal.confirmSendButton;
     const cancelButton = sendAssetConfirmModal.cancelButton;
 
+    let recipientAddress;
     // Ensure recipient account type matches sender (public/private).
     try {
-      const recipientRaw = this.foundAddressObject?.address;
-      if (!recipientRaw) {
+      if (!recipient.address || this.usernameInput.value !== recipient.input) {
         showToast('Recipient address not resolved; enter a valid username', 0, 'error');
         return;
       }
-      const recipientAddress = normalizeAddress(recipientRaw);
+      recipientAddress = normalizeAddress(recipient.address);
 
       await getNetworkParams();
       const myIsPrivate = !!myData?.account?.private;
@@ -34134,7 +34569,7 @@ class SendAssetFormModal {
     }
     const amountText = this.amountInput.value.trim();
     const amountUnit = this.balanceSymbol.textContent;
-    const username = this.usernameInput.value.trim();
+    const username = recipient.username;
     const memo = this.memoInput.value.trim();
     const amountWei = this.getAmountWei();
     if (amountWei === null) {
@@ -34147,12 +34582,12 @@ class SendAssetFormModal {
     const hasBalance = await validateBalance(amountWei, assetIndex, warning);
     if (!this.isCurrentSession(session) || this.foundAddressObject !== recipient
       || this.amountInput.value.trim() !== amountText || this.balanceSymbol.textContent !== amountUnit
-      || this.usernameInput.value.trim() !== username || this.memoInput.value.trim() !== memo) return;
+      || this.usernameInput.value !== recipient.input || this.memoInput.value.trim() !== memo) return;
     this.balanceWarning.textContent = warning.textContent;
     this.balanceWarning.style.display = warning.style.display;
     if (!hasBalance || !this.validateToll(amountWei)) return;
 
-    const payment = { amountWei, username, memo, retryTxId: this.retryTxIdInput.value };
+    const payment = { amountWei, username, recipientAddress, memo, retryTxId: this.retryTxIdInput.value };
     if (!sendAssetConfirmModal.open(payment)) return;
     const libAmount = EthNum.toStr(amountWei);
     const usdAmount = amountUnit === 'USD' ? Number(amountText) : Number(libAmount) * getStabilityFactor();
@@ -34447,13 +34882,14 @@ class SendAssetFormModal {
    * @returns {Promise<void>}
    */
   async reopen() {
-    const tempUsername = this.usernameInput?.value;
+    const input = this.usernameInput.value;
+    const recipient = this.foundAddressObject;
+    const expectedAddress = recipient.input === input ? recipient.address || recipient.expectedAddress : undefined;
     const tempAmount = this.amountInput?.value;
     const tempUnit = this.balanceSymbol.textContent;
     const tempMemo = this.memoInput?.value;
     await this.close();
-    this.username = tempUsername;
-    if (!await this.open()) return;
+    if (!await this.open({ input, expectedAddress })) return;
     this.amountInput.value = tempAmount;
     this.balanceSymbol.textContent = tempUnit;
     this.memoInput.value = tempMemo || '';
@@ -34474,6 +34910,7 @@ class SendAssetFormModal {
    * @returns {void}
    */
   resetForm(){
+    this.contactAutocomplete.close();
     this.sendForm?.reset();
     this.usernameAvailable.textContent = '';
     this.balanceWarning.textContent = '';
@@ -34532,6 +34969,7 @@ class SendAssetFormModal {
       const base64Data = data.substring('liberdus://'.length);
       const jsonData = bin2utf8(base642bin(base64Data));
       const paymentData = JSON.parse(jsonData);
+      if (paymentData.t !== undefined) throw new Error('Unsupported payment request type.');
 
       if (paymentData.u) {
         this.usernameInput.value = paymentData.u;
@@ -34700,6 +35138,12 @@ class SendAssetConfirmModal {
     } catch (error) {
       console.error('Error looking up username:', error);
       showToast('Error looking up username', 0, 'error');
+      return;
+    }
+
+    if (toAddress !== payment.recipientAddress) {
+      this.close();
+      showToast('Recipient address changed. Check the recipient and enter the username again.', 0, 'error');
       return;
     }
 
@@ -35334,10 +35778,21 @@ function removeEvmPayment(record) {
 
 evmAssets.configure({
   getAccount: () => myAccount,
-  findContact: (username) => getMessagePaymentContacts()
-    .find((contact) => normalizeUsername(contact.username || '') === username) || null,
+  lookupUsername: getUsernameAddress,
+  createContactAutocomplete: ({ input, list, onSelect }) => new ContactAutocomplete({
+    input,
+    list,
+    onSelect,
+    getContacts: () => {
+      if (!myAccount) return [];
+      const ownAddress = normalizeAddress(myAccount.keys.address);
+      return Object.values(myData?.contacts || {}).filter((contact) =>
+        contact.address && contact.public && !isFaucetAddress(contact.address)
+        && /^[a-z0-9]{3,15}$/i.test(contact.username || '') && normalizeAddress(contact.address) !== ownAddress);
+    },
+  }),
   prepareChatPayment: (resolution, account) => chatModal.prepareEvmPaymentRecipient(resolution, account),
-  preparePaymentMessage: (record, account) => chatModal.prepareEvmPaymentMessage(record, account),
+  preparePaymentMessage: (record, account, isCurrent) => chatModal.prepareEvmPaymentMessage(record, account, isCurrent),
   sendChatPayment: (record, account) => chatModal.sendEvmPaymentMessage(record, account),
   getPayments: loadEvmPayments,
   savePayment: saveEvmPayment,
@@ -37464,9 +37919,12 @@ async function checkPendingTransactionsOnce() {
   for (let i = myData.pending.length - 1; i >= 0; i--) {
     const pendingTxInfo = myData.pending[i];
     const { txid, type, submittedts } = pendingTxInfo;
+    const isPendingDaoTransaction = isDaoTransactionType(type);
+    const isPendingDaoVote = type === DAO_ACTION_TYPES.VOTE;
+    const voteReceiptRetryAt = pendingTxInfo.daoVoteReceiptRetryAt;
+    if (isPendingDaoVote && voteReceiptRetryAt > now) continue;
     const reactionPending = pendingTxInfo.reactionPending;
     const isPendingMessage = type === 'message' && !reactionPending && !pendingTxInfo.editPending;
-    const isPendingDaoTransaction = isDaoTransactionType(type);
     if (reactionPending && reactionPending.status !== 'pending') {
       continue;
     }
@@ -37490,14 +37948,31 @@ async function checkPendingTransactionsOnce() {
       } else {
         res = await queryNetwork(endpointPath);
         if (myAccount !== account) return;
+        if (isPendingDaoVote && submittedts < twentySecondsAgo
+          && typeof res?.transaction?.success !== 'boolean') {
+          res = await queryNetwork(`/transaction/${txid}`);
+          if (myAccount !== account) return;
+        }
       }
       //console.log(`DEBUG: txid ${txid} res: ${JSON.stringify(res)}`);
       const receipt = res?.transaction;
+      const hasReceiptOutcome = typeof receipt?.success === 'boolean';
+      const missingReceipt = isPendingDaoVote ? !hasReceiptOutcome : !receipt || Object.keys(receipt).length === 0;
       const confirmationTimedOut = isPendingMessage
-        ? receipt?.success !== true && receipt?.success !== false
-          && getCorrectedTimestamp() - pendingTxInfo.checkedts >= ChatModal.CONFIRMATION_WINDOW_MS
-        : submittedts < thirtySecondsAgo && (!receipt || Object.keys(receipt).length === 0);
+        ? !hasReceiptOutcome && getCorrectedTimestamp() - pendingTxInfo.checkedts >= ChatModal.CONFIRMATION_WINDOW_MS
+        : submittedts < thirtySecondsAgo && missingReceipt;
       if (confirmationTimedOut) {
+        // Continue checking an unresolved vote without keeping the vote form locked.
+        if (isPendingDaoVote && now < pendingTxInfo.reminderExpiresAt) {
+          pendingTxInfo.daoVoteReceiptRetryAt = now + 60_000;
+          if (!voteReceiptRetryAt) {
+            didMutatePendingState = true;
+            await daoModal.refreshAfterDaoSettlement(pendingTxInfo, 'timeout');
+            if (myAccount !== account) return;
+            showToast(getDaoTransactionMessage(type, 'timeout'), 0, 'warning');
+          }
+          continue;
+        }
         console.error(`DEBUG: txid ${txid} timed out, removing completely`);
         if (reactionPending) {
           const outcome = settleAndQueueReactionCleanup(pendingTxInfo, 'failure');
@@ -37535,7 +38010,7 @@ async function checkPendingTransactionsOnce() {
           chatModal.refreshCurrentView(txid);
           await chatsScreen.updateChatList();
         }
-        if (isPendingDaoTransaction) {
+        if (isPendingDaoTransaction && !voteReceiptRetryAt) {
           await daoModal.refreshAfterDaoSettlement(pendingTxInfo, 'timeout');
           showToast(getDaoTransactionMessage(type, 'timeout'), 0, 'warning');
         }
@@ -37602,7 +38077,8 @@ async function checkPendingTransactionsOnce() {
         }
 
         if (isPendingDaoTransaction) {
-          const didRefreshDaoData = await daoModal.refreshAfterDaoSettlement(pendingTxInfo, 'success');
+          const didRefreshDaoData = await daoModal.refreshAfterDaoSettlement(pendingTxInfo, 'success', receipt);
+          if (myAccount !== account) return;
           if (didRefreshDaoData) {
             showToast(getDaoTransactionMessage(type, 'success'), 3000, 'success');
           } else if (!myData.pending.some((pendingTx) => pendingTx.txid === txid)) {
@@ -37619,9 +38095,15 @@ async function checkPendingTransactionsOnce() {
 
         if (type === 'message') settleEvmPaymentMessage(txid, false);
 
+        if (isPendingDaoVote) {
+          await daoModal.refreshAfterDaoSettlement(pendingTxInfo, 'failure');
+          if (myAccount !== account) return;
+        }
+
         // Check for failure reason in the transaction receipt
         const failureReason = res?.transaction?.reason || 'Transaction failed';
         const feeMismatchStatus = await refreshNetworkParamsOnTxFeeMismatch(failureReason);
+        if (isPendingDaoVote && myAccount !== account) return;
         const userFailureReason = getUserFacingTxFailureReason(failureReason, feeMismatchStatus);
         console.log(`DEBUG: failure reason: ${failureReason}`);
 
@@ -37696,7 +38178,7 @@ async function checkPendingTransactionsOnce() {
           }
         }
         if (!reactionPending && isPendingDaoTransaction) {
-          await daoModal.refreshAfterDaoSettlement(pendingTxInfo, 'failure');
+          if (!isPendingDaoVote) await daoModal.refreshAfterDaoSettlement(pendingTxInfo, 'failure');
           const failureMessage = getDaoTransactionMessage(type, 'failure');
           showToast(`${failureMessage}: ${userFailureReason}`, 0, 'error');
         }
@@ -38386,17 +38868,146 @@ const localStorageMonitor = new LocalStorageMonitor();
 const CONTACT_AVATAR_MAX_THUMB_SIZE = 128;
 const CONTACT_AVATAR_JPEG_QUALITY = 0.85;
 
-/**
- * ContactAvatarCache - Handles IndexedDB storage for contact avatar thumbnails
- */
+/** Tracks shared media ownership for best-effort account cleanup. */
+class MediaCacheOwnership {
+  constructor(database, storeNames) {
+    this.database = database;
+    this.storeNames = storeNames;
+    this.deleting = false;
+  }
+
+  async deleteDatabase() {
+    this.deleting = true;
+    const cache = this.database;
+    // Wait for any existing open to finish so we can close its connection.
+    await cache.openPromise?.catch(() => {});
+    cache.db?.close();
+    cache.db = null;
+    cache.openPromise = null;
+
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(cache.dbName);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error(`Deletion of ${cache.dbName} is blocked by another connection`));
+    });
+  }
+
+  static upgrade(transaction, storeNames) {
+    for (const name of storeNames) {
+      const store = transaction.objectStore(name);
+      if (!store.indexNames.contains('byOwner')) {
+        store.createIndex('byOwner', 'ownerKeys', { multiEntry: true, unique: false });
+      }
+    }
+  }
+
+  static getOwnerKey(account = myAccount) {
+    return account?.username && account?.netid ? `${account.username}_${account.netid}` : null;
+  }
+
+  /** @param {string|string[]|null} owner */
+  async run(storeNames, owner, action) {
+    const owners = (Array.isArray(owner) ? owner : [owner]).filter(Boolean);
+    const db = await this.database.init();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(storeNames, 'readwrite');
+      let result = false;
+      transaction.oncomplete = () => resolve(result);
+      transaction.onerror = event => reject(event.target.error || transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error('Media cache transaction aborted'));
+      try {
+        action({ transaction, owners, setResult: value => { result = value; } });
+      } catch (error) {
+        reject(error);
+        transaction.abort();
+      }
+    });
+  }
+
+  static mergeRecord(existing, record, owners) {
+    const next = { ...record };
+    delete next.ownerKeys;
+    // An old row may have consumers that were never attributed. Keep it exempt.
+    const legacy = existing && !Array.isArray(existing.ownerKeys);
+    if (legacy) return next;
+    if (existing || owners.length) {
+      next.ownerKeys = [...new Set([...(existing?.ownerKeys || []), ...owners])];
+    }
+    return next;
+  }
+
+  async read(storeName, id, owner = null, acceptsRecord) {
+    return this.run([storeName], owner, ({ transaction, owners, setResult }) => {
+      const store = transaction.objectStore(storeName);
+      const request = store.get(id);
+      request.onsuccess = () => {
+        let record = request.result;
+        if (record && acceptsRecord && !acceptsRecord(record)) {
+          setResult(null);
+          return;
+        }
+        if (record && owners.length && Array.isArray(record.ownerKeys)) {
+          const previousOwnerCount = record.ownerKeys.length;
+          record = MediaCacheOwnership.mergeRecord(record, record, owners);
+          if (record.ownerKeys.length !== previousOwnerCount) store.put(record);
+        }
+        setResult(record || null);
+      };
+    });
+  }
+
+  async save(storeName, record, owner = null) {
+    return this.writeRecord(storeName, record, { owners: owner, overwrite: true, legacy: false });
+  }
+
+  async writeRecord(storeName, record, { owners, overwrite, legacy }) {
+    return this.run([storeName], owners, ({ transaction, owners, setResult }) => {
+      const store = transaction.objectStore(storeName);
+      const request = store.get(record.id);
+      request.onsuccess = () => {
+        const existing = request.result;
+        const replacement = existing && !overwrite ? existing : record;
+        const next = MediaCacheOwnership.mergeRecord(existing, replacement, owners);
+        if (legacy) delete next.ownerKeys;
+        store.put(next);
+        setResult(!existing || overwrite);
+      };
+    });
+  }
+
+  async removeOwners(accountKeys) {
+    const keys = new Set(accountKeys);
+    if (!keys.size) return;
+    await this.run(this.storeNames, null, ({ transaction }) => {
+      for (const key of keys) {
+        for (const name of this.storeNames) {
+          const request = transaction.objectStore(name).index('byOwner').openCursor(IDBKeyRange.only(key));
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) return;
+            const ownerKeys = cursor.value.ownerKeys.filter(ownerKey => !keys.has(ownerKey));
+            if (ownerKeys.length) cursor.update({ ...cursor.value, ownerKeys });
+            else cursor.delete();
+            cursor.continue();
+          };
+        }
+      }
+    });
+  }
+}
+
+/** Handles IndexedDB storage for contact avatar thumbnails. */
 class ContactAvatarCache {
   constructor() {
     this.dbName = 'liberdus_contact_avatars';
     this.storeName = 'avatars';
     // Bump version to force onupgradeneeded for existing installations
-    this.dbVersion = 2;
+    this.dbVersion = 3;
     this.db = null;
+    this.openPromise = null;
     this.blobUrlCache = new Map();
+    this.ownership = new MediaCacheOwnership(this, [this.storeName]);
   }
 
   /**
@@ -38413,24 +39024,43 @@ class ContactAvatarCache {
 
   /**
    * Initialize IndexedDB database connection
-   * @returns {Promise<void>}
+   * @returns {Promise<IDBDatabase>}
    */
   async init() {
-    return new Promise((resolve, reject) => {
+    if (this.ownership.deleting) throw new Error('Contact avatar cache is being deleted');
+    if (this.db) return this.db;
+    if (this.openPromise) return this.openPromise;
+    this.openPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.dbVersion);
 
       request.onerror = () => {
         console.error('Failed to open contact avatar database:', request.error);
+        this.openPromise = null;
         reject(request.error);
       };
 
       request.onsuccess = () => {
         this.db = request.result;
-        resolve();
+        this.db.onversionchange = (event) => {
+          if (event.newVersion === null) {
+            this.ownership.deleting = true;
+            this.clearBlobUrls();
+          }
+          request.result.close();
+          this.db = null;
+          this.openPromise = null;
+        };
+        resolve(this.db);
       };
+
+      request.onblocked = () => reject(new Error('Contact avatar database upgrade blocked'));
 
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
+        if (event.oldVersion >= 2) {
+          MediaCacheOwnership.upgrade(request.transaction, [this.storeName]);
+          return;
+        }
         // If an old store exists (keyPath=address) remove it and recreate under 'id'.
         if (db.objectStoreNames.contains(this.storeName)) {
           try {
@@ -38442,8 +39072,10 @@ class ContactAvatarCache {
         // Use avatar id as the primary key for one-image-per-id storage
         const store = db.createObjectStore(this.storeName, { keyPath: 'id' });
         store.createIndex('savedAt', 'savedAt', { unique: false });
+        MediaCacheOwnership.upgrade(request.transaction, [this.storeName]);
       };
     });
+    return this.openPromise;
   }
 
   /**
@@ -38497,85 +39129,74 @@ class ContactAvatarCache {
     });
   }
 
+  async removeOwners(accountKeys) {
+    await this.ownership.removeOwners(accountKeys);
+    this.clearBlobUrls();
+  }
+
+  async deleteDatabase() {
+    await this.ownership.deleteDatabase();
+    this.clearBlobUrls();
+  }
+
+  clearBlobUrls() {
+    for (const url of this.blobUrlCache.values()) URL.revokeObjectURL(url);
+    this.blobUrlCache.clear();
+  }
+
   /**
    * Save an avatar blob to the avatars store keyed by avatar id.
    * @param {string} id - Avatar id (server-provided or locally-generated)
    * @param {Blob} avatarBlob - The avatar image blob to store
-   * @returns {Promise<void>}
+   * @param {string|null} owner - Account key captured before asynchronous media work
+   * @returns {Promise<boolean>} Whether the blob was saved
    */
-  async save(id, avatarBlob) {
+  async save(id, avatarBlob, owner = MediaCacheOwnership.getOwnerKey()) {
     if (!id) throw new Error('avatar id required');
-    if (!this.db) await this.init();
-
-    // Revoke any cached object URL for this id
+    await this.ownership.save(this.storeName, {
+      id,
+      blob: avatarBlob,
+      type: avatarBlob?.type || 'image/jpeg',
+      size: avatarBlob?.size || 0,
+      savedAt: Date.now(),
+    }, owner);
     if (this.blobUrlCache.has(id)) {
-      try { URL.revokeObjectURL(this.blobUrlCache.get(id)); } catch (e) {}
+      URL.revokeObjectURL(this.blobUrlCache.get(id));
       this.blobUrlCache.delete(id);
     }
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([this.storeName], 'readwrite');
-      const store = tx.objectStore(this.storeName);
-
-      const record = {
-        id,
-        blob: avatarBlob,
-        type: avatarBlob?.type || 'image/jpeg',
-        size: avatarBlob?.size || 0,
-        savedAt: Date.now(),
-      };
-
-      const putReq = store.put(record);
-      putReq.onsuccess = () => resolve();
-      putReq.onerror = () => {
-        console.warn('Failed to save avatar blob:', putReq.error);
-        reject(putReq.error);
-      };
-    });
+    return true;
   }
 
   /**
    * Get avatar blob by avatar id.
    * @param {string} id - Avatar id (server-provided or locally-generated)
+   * @param {string|null} owner - Account key to retain on a cache hit
    * @returns {Promise<Blob|null>} The avatar blob or null if not found
    */
-  async get(id) {
+  async get(id, owner = MediaCacheOwnership.getOwnerKey()) {
     if (!id) return null;
-    if (!this.db) await this.init();
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([this.storeName], 'readonly');
-      const store = tx.objectStore(this.storeName);
-      const request = store.get(id);
-
-      request.onsuccess = () => {
-        const result = request.result;
-        if (!result) return resolve(null);
-        return resolve(result.blob || null);
-      };
-
-      request.onerror = () => {
-        console.warn('Failed to get avatar blob:', request.error);
-        reject(request.error);
-      };
-    });
+    const record = await this.ownership.read(this.storeName, id, owner);
+    return record?.blob || null;
   }
 
   /**
    * Get a blob URL for an avatar id (cached).
    * @param {string} id - Avatar id (server-provided or locally-generated)
+   * @param {string|null} owner - Account key to retain on a cache hit
    * @returns {Promise<string|null>} Blob URL or null if not found
    */
-  async getBlobUrl(id) {
+  async getBlobUrl(id, owner) {
     if (!id) return null;
-    if (this.blobUrlCache.has(id)) return this.blobUrlCache.get(id);
-    const blob = await this.get(id);
-    if (blob) {
-      const blobUrl = URL.createObjectURL(blob);
-      this.blobUrlCache.set(id, blobUrl);
-      return blobUrl;
+    const blob = await this.get(id, owner);
+    if (!blob) {
+      if (this.blobUrlCache.has(id)) URL.revokeObjectURL(this.blobUrlCache.get(id));
+      this.blobUrlCache.delete(id);
+      return null;
     }
-    return null;
+    if (this.blobUrlCache.has(id)) return this.blobUrlCache.get(id);
+    const blobUrl = URL.createObjectURL(blob);
+    this.blobUrlCache.set(id, blobUrl);
+    return blobUrl;
   }
 
   /**
@@ -38624,6 +39245,7 @@ class ContactAvatarCache {
                 data: await this.blobToBase64(item.blob),
                 type: item.type || 'image/jpeg',
                 size: item.size || 0,
+                ...(Array.isArray(item.ownerKeys) ? { ownerKeys: [...item.ownerKeys] } : {}),
               };
             } catch (e) {
               console.warn(`Failed to export avatar id ${item.id}:`, e);
@@ -38644,30 +39266,31 @@ class ContactAvatarCache {
    * Import avatars from exported data
    * @param {Object} avatarsData - Object mapping avatar id to { data: base64, type: mimeType }
    * @param {boolean} overwrite - Whether to overwrite existing avatars
+   * @param {string[]} acceptedOwnerKeys - Successfully restored account keys
    * @returns {Promise<number>} Number of avatars imported
    */
-  async importAll(avatarsData, overwrite = false) {
-    if (!this.db) await this.init();
+  async importAll(avatarsData, overwrite = false, acceptedOwnerKeys = []) {
     if (!avatarsData || typeof avatarsData !== 'object') return 0;
-
     let importedCount = 0;
     for (const [id, avatarInfo] of Object.entries(avatarsData)) {
-      if (!avatarInfo) continue;
+      if (!avatarInfo?.data) continue;
       try {
-        if (!overwrite) {
-          const existing = await this.get(id);
-          if (existing) continue;
-        }
-        if (avatarInfo.data) {
-          const blob = this.base64ToBlob(avatarInfo.data, avatarInfo.type || 'image/jpeg');
-          await this.save(id, blob);
+        const ownerKeys = Array.isArray(avatarInfo.ownerKeys) ? avatarInfo.ownerKeys : null;
+        const owners = ownerKeys ? acceptedOwnerKeys.filter(key => ownerKeys.includes(key)) : acceptedOwnerKeys;
+        if (ownerKeys && !owners.length) continue;
+        const blob = this.base64ToBlob(avatarInfo.data, avatarInfo.type || 'image/jpeg');
+        const saved = await this.ownership.writeRecord(this.storeName, {
+          id, blob, type: avatarInfo.type || 'image/jpeg', size: blob.size, savedAt: Date.now(),
+        }, { owners, overwrite, legacy: ownerKeys === null });
+        if (saved) {
+          if (this.blobUrlCache.has(id)) URL.revokeObjectURL(this.blobUrlCache.get(id));
+          this.blobUrlCache.delete(id);
           importedCount++;
         }
       } catch (e) {
         console.warn(`Failed to import avatar id ${id}:`, e);
       }
     }
-
     return importedCount;
   }
 
@@ -38715,10 +39338,12 @@ class ThumbnailCache {
   constructor() {
     this.dbName = 'liberdus_thumbnails';
     this.storeName = 'thumbnails';
-    this.fullImageStoreName = 'fullImages';
-    this.dbVersion = 3;
+    // Keep the existing store and its records when adding full videos.
+    this.fullMediaStoreName = 'fullImages';
+    this.dbVersion = 4;
     this.db = null;
     this.openPromise = null;
+    this.ownership = new MediaCacheOwnership(this, [this.storeName, this.fullMediaStoreName]);
     this.maxCacheSize = 50 * 1024 * 1024; // 50MB in bytes
   }
 
@@ -38760,6 +39385,7 @@ class ThumbnailCache {
    * @returns {Promise<void>}
    */
   async init() {
+    if (this.ownership.deleting) throw new Error('Attachment cache is being deleted');
     if (this.db) return this.db;
     if (this.openPromise) return this.openPromise;
 
@@ -38779,8 +39405,9 @@ class ThumbnailCache {
 
       request.onsuccess = () => {
         this.db = request.result;
-        this.db.onversionchange = () => {
-          this.db.close();
+        this.db.onversionchange = (event) => {
+          if (event.newVersion === null) this.ownership.deleting = true;
+          request.result.close();
           this.db = null;
           this.openPromise = null;
         };
@@ -38801,7 +39428,7 @@ class ThumbnailCache {
    * @returns {Array<(transaction: IDBTransaction, done: () => void) => void>}
    */
   get migrations() {
-    return [this.migrateToVersion1, this.migrateToVersion2, this.migrateToVersion3];
+    return [this.migrateToVersion1, this.migrateToVersion2, this.migrateToVersion3, this.migrateToVersion4];
   }
 
   /**
@@ -38845,7 +39472,7 @@ class ThumbnailCache {
    * @param {() => void} done
    */
   migrateToVersion2(transaction, done) {
-    const store = ThumbnailCache.ensureLegacyStore(transaction, this.fullImageStoreName);
+    const store = ThumbnailCache.ensureLegacyStore(transaction, this.fullMediaStoreName);
     store.count().onsuccess = done;
   }
 
@@ -38856,7 +39483,7 @@ class ThumbnailCache {
    */
   migrateToVersion3(transaction, done) {
     const db = transaction.db;
-    const storeNames = [this.storeName, this.fullImageStoreName];
+    const storeNames = [this.storeName, this.fullMediaStoreName];
     let remaining = storeNames.length;
     const storeFinished = () => {
       remaining--;
@@ -38874,6 +39501,19 @@ class ThumbnailCache {
       store.createIndex('cachedAt', 'cachedAt', { unique: false });
       ThumbnailCache.migrateStore(source, store, storeFinished);
     }
+  }
+
+  migrateToVersion4(transaction, done) {
+    MediaCacheOwnership.upgrade(transaction, [this.storeName, this.fullMediaStoreName]);
+    done();
+  }
+
+  removeOwners(accountKeys) {
+    return this.ownership.removeOwners(accountKeys);
+  }
+
+  deleteDatabase() {
+    return this.ownership.deleteDatabase();
   }
 
   /**
@@ -39104,9 +39744,8 @@ class ThumbnailCache {
 
     const sizeToRemove = currentSize - targetSize;
 
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([this.storeName], 'readwrite');
-      const store = tx.objectStore(this.storeName);
+    return this.ownership.run([this.storeName], null, ({ transaction, setResult }) => {
+      const store = transaction.objectStore(this.storeName);
       const index = store.index('cachedAt');
       const request = index.openCursor(null, 'next'); // Oldest first
 
@@ -39124,13 +39763,8 @@ class ThumbnailCache {
           removedSize += itemSize;
           cursor.continue();
         } else {
-          resolve(deletedCount);
+          setResult(deletedCount);
         }
-      };
-
-      request.onerror = () => {
-        console.warn('Failed to cleanup thumbnails by size:', request.error);
-        reject(request.error);
       };
     });
   }
@@ -39140,77 +39774,28 @@ class ThumbnailCache {
    * @param {string} attachmentUrl - The attachment URL or exported attachment ID
    * @param {Blob} thumbnailBlob - The thumbnail blob to store
    * @param {string} originalType - Original MIME type
-   * @returns {Promise<void>}
+   * @param {string|null} owner - Account key captured before asynchronous media work
+   * @returns {Promise<boolean>} Whether the blob was saved
    */
-  async save(attachmentUrl, thumbnailBlob, originalType) {
+  async save(attachmentUrl, thumbnailBlob, originalType, owner = MediaCacheOwnership.getOwnerKey()) {
     const id = ThumbnailCache.getAttachmentId(attachmentUrl);
-    if (!this.db) {
-      await this.init();
-    }
-
-    // Check if adding this thumbnail would exceed size limit
     const currentSize = await this.getCacheSize();
-    const newThumbnailSize = thumbnailBlob.size;
-    
-    // If adding this thumbnail would exceed limit, cleanup first
-    if (currentSize + newThumbnailSize > this.maxCacheSize) {
-      await this.cleanupBySize();
-    }
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([this.storeName], 'readwrite');
-      const store = tx.objectStore(this.storeName);
-
-      const data = {
-        id,
-        thumbnail: thumbnailBlob,
-        originalType: originalType,
-        cachedAt: Date.now()
-      };
-
-      const request = store.put(data);
-
-      request.onsuccess = () => {
-        resolve();
-      };
-
-      request.onerror = () => {
-        console.warn('Failed to save thumbnail:', request.error);
-        reject(request.error);
-      };
-    });
+    if (currentSize + thumbnailBlob.size > this.maxCacheSize) await this.cleanupBySize();
+    return this.ownership.save(this.storeName, {
+      id, thumbnail: thumbnailBlob, originalType, cachedAt: Date.now(),
+    }, owner);
   }
 
   /**
    * Retrieve a cached thumbnail from IndexedDB
    * @param {string} attachmentUrl - The attachment URL or exported attachment ID
+   * @param {string|null} owner - Account key to retain on a cache hit
    * @returns {Promise<Blob|null>} The thumbnail blob or null if not found
    */
-  async get(attachmentUrl) {
+  async get(attachmentUrl, owner = MediaCacheOwnership.getOwnerKey()) {
     const id = ThumbnailCache.getAttachmentId(attachmentUrl);
-    if (!this.db) {
-      await this.init();
-    }
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction([this.storeName], 'readonly');
-      const store = tx.objectStore(this.storeName);
-      const request = store.get(id);
-
-      request.onsuccess = () => {
-        const result = request.result;
-        if (result && result.thumbnail) {
-          resolve(result.thumbnail);
-        } else {
-          resolve(null);
-        }
-      };
-
-      request.onerror = () => {
-        console.warn('Failed to get thumbnail:', request.error);
-        reject(request.error);
-      };
-    });
+    const record = await this.ownership.read(this.storeName, id, owner);
+    return record?.thumbnail || null;
   }
 
   /**
@@ -39265,7 +39850,8 @@ class ThumbnailCache {
               thumbnails[item.id] = {
                 data: base64,
                 type: item.thumbnail.type || 'image/jpeg',
-                originalType: item.originalType || 'image/jpeg'
+                originalType: item.originalType || 'image/jpeg',
+                ...(Array.isArray(item.ownerKeys) ? { ownerKeys: [...item.ownerKeys] } : {}),
               };
             } catch (e) {
               console.warn(`Failed to export thumbnail for ${item.id}:`, e);
@@ -39287,38 +39873,34 @@ class ThumbnailCache {
    * Import thumbnails from exported data
    * @param {Object} thumbnailsData - Object mapping attachment IDs or legacy URLs to { data: base64, type: mimeType, originalType: string }
    * @param {boolean} overwrite - Whether to overwrite existing thumbnails
+   * @param {string[]} acceptedOwnerKeys - Successfully restored account keys
    * @returns {Promise<number>} Number of thumbnails imported
    */
-  async importAll(thumbnailsData, overwrite = false) {
-    if (!this.db) {
-      await this.init();
-    }
-
-    if (!thumbnailsData || typeof thumbnailsData !== 'object') {
-      return 0;
-    }
-
+  async importAll(thumbnailsData, overwrite = false, acceptedOwnerKeys = []) {
+    if (!thumbnailsData || typeof thumbnailsData !== 'object') return 0;
     let importedCount = 0;
-
     for (const [urlOrId, thumbInfo] of Object.entries(thumbnailsData)) {
-      if (!thumbInfo || !thumbInfo.data) continue;
-
+      if (!thumbInfo?.data) continue;
       try {
-        // Check if thumbnail already exists
-        if (!overwrite) {
-          const existing = await this.get(urlOrId);
-          if (existing) continue;
+        const ownerKeys = Array.isArray(thumbInfo.ownerKeys) ? thumbInfo.ownerKeys : null;
+        const owners = ownerKeys ? acceptedOwnerKeys.filter(key => ownerKeys.includes(key)) : acceptedOwnerKeys;
+        if (ownerKeys && !owners.length) continue;
+        const id = ThumbnailCache.getAttachmentId(urlOrId);
+        const thumbnail = this.base64ToBlob(thumbInfo.data, thumbInfo.type || 'image/jpeg');
+        const existing = !overwrite && await this.ownership.read(this.storeName, id, owners);
+        if (!existing) {
+          const currentSize = await this.getCacheSize();
+          if (currentSize + thumbnail.size > this.maxCacheSize) await this.cleanupBySize();
         }
-
-        // Convert base64 back to blob
-        const blob = this.base64ToBlob(thumbInfo.data, thumbInfo.type || 'image/jpeg');
-        await this.save(urlOrId, blob, thumbInfo.originalType || thumbInfo.type || 'image/jpeg');
-        importedCount++;
+        const saved = await this.ownership.writeRecord(this.storeName, {
+          id, thumbnail,
+          originalType: thumbInfo.originalType || thumbInfo.type || 'image/jpeg', cachedAt: Date.now(),
+        }, { owners, overwrite, legacy: ownerKeys === null });
+        if (saved) importedCount++;
       } catch (e) {
         console.warn(`Failed to import thumbnail for ${urlOrId}:`, e);
       }
     }
-
     return importedCount;
   }
 
@@ -39366,6 +39948,7 @@ const thumbnailCache = new ThumbnailCache();
  * @returns {Promise<string>} HTML string for avatar image/svg
  */
 async function getContactAvatarHtml(contactOrAddress, size = 50) {
+  const owner = MediaCacheOwnership.getOwnerKey();
   const address = typeof contactOrAddress === 'string'
     ? normalizeAddress(contactOrAddress)
     : normalizeAddress(contactOrAddress?.address);
@@ -39384,7 +39967,7 @@ async function getContactAvatarHtml(contactOrAddress, size = 50) {
     try {
       const aid = myData?.account?.avatarId;
       if (aid) {
-        const url = await contactAvatarCache.getBlobUrl(aid);
+        const url = await contactAvatarCache.getBlobUrl(aid, owner);
         if (url) return makeImg(url);
       }
     } catch (e) {
@@ -39413,13 +39996,13 @@ async function getContactAvatarHtml(contactOrAddress, size = 50) {
           id = myData?.account?.avatarId;
         }
         if (id) {
-          const url = await contactAvatarCache.getBlobUrl(id);
+          const url = await contactAvatarCache.getBlobUrl(id, owner);
           if (url) return makeImg(url);
         }
       } else if (usePref === 'contact') {
         const id = contact?.avatarId || null;
         if (id) {
-          const url = await contactAvatarCache.getBlobUrl(id);
+          const url = await contactAvatarCache.getBlobUrl(id, owner);
           if (url) return makeImg(url);
         }
       } else {
@@ -39428,12 +40011,12 @@ async function getContactAvatarHtml(contactOrAddress, size = 50) {
         // unrelated contacts with no images to show the user's own avatar.
         let id = contact?.avatarId;
         if (id) {
-          let url = await contactAvatarCache.getBlobUrl(id);
+          let url = await contactAvatarCache.getBlobUrl(id, owner);
           if (url) return makeImg(url);
         }
         id = contact?.mineAvatarId;
         if (id) {
-          let url = await contactAvatarCache.getBlobUrl(id);
+          let url = await contactAvatarCache.getBlobUrl(id, owner);
           if (url) return makeImg(url);
         }
       }
@@ -39615,6 +40198,7 @@ const modalCloseHandlers = new Map([
   ['multichainModal', () => multichain.close('multichainModal')],
   ['multichainAssetModal', () => multichain.close('multichainAssetModal')],
   ['multichainReceiveModal', () => multichain.close('multichainReceiveModal')],
+  ['multichainRequestModal', () => multichain.close('multichainRequestModal')],
   ['multichainWithdrawModal', () => multichain.close('multichainWithdrawModal')],
   ['multichainSwapModal', () => multichain.close('multichainSwapModal')],
   ['multichainTokenPickerModal', () => multichain.close('multichainTokenPickerModal')],
@@ -40066,130 +40650,173 @@ class PopupSelect {
   }
 }
 
-const FULL_IMAGE_CACHE_MAX_SIZE = 250 * 1024 * 1024;
+const FULL_MEDIA_CACHE_MAX_SIZE = 1024 * 1024 * 1024;
 
-class FullImageCache {
-  constructor(database, maxCacheSize = FULL_IMAGE_CACHE_MAX_SIZE) {
+class FullMediaCache {
+  constructor(database, maxCacheSize = FULL_MEDIA_CACHE_MAX_SIZE) {
     this.database = database;
+    this.storeName = database.fullMediaStoreName;
     this.maxCacheSize = maxCacheSize;
   }
 
-  getRequestResult(request) {
-    return new Promise((resolve, reject) => {
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+  static supportsMimeType(value) {
+    const mimeType = normalizeMimeType(value);
+    return mimeType.startsWith('image/') || mimeType.startsWith('video/');
   }
 
-  waitForTransaction(transaction) {
-    return new Promise((resolve, reject) => {
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-      transaction.onabort = () => reject(transaction.error);
-    });
+  static matchesRecord(record, mimeType, keyFingerprint) {
+    if (!(record?.blob instanceof Blob)) return false;
+    const storedType = normalizeMimeType(record.mimeType || record.blob.type);
+    if (mimeType.startsWith('video/')) {
+      return storedType.startsWith('video/') && !!keyFingerprint && record.keyFingerprint === keyFingerprint;
+    }
+    return mimeType.startsWith('image/') && storedType.startsWith('image/') && !record.keyFingerprint;
   }
 
-  async get(attachmentUrl) {
-    const record = await this.getRecord(attachmentUrl);
+  async get(attachmentUrl, owner, acceptsRecord) {
+    const record = await this.getRecord(attachmentUrl, owner, acceptsRecord);
     return record?.blob || null;
   }
 
-  async getRecord(attachmentUrl) {
+  async getRecord(attachmentUrl, owner = MediaCacheOwnership.getOwnerKey(), acceptsRecord) {
     const id = ThumbnailCache.getAttachmentId(attachmentUrl);
-    const db = await this.database.init();
-    const transaction = db.transaction(this.database.fullImageStoreName, 'readonly');
-    const store = transaction.objectStore(this.database.fullImageStoreName);
-    return this.getRequestResult(store.get(id));
+    return this.database.ownership.read(this.storeName, id, owner, acceptsRecord);
   }
 
-  async getCacheSize() {
-    const db = await this.database.init();
-    const transaction = db.transaction(this.database.fullImageStoreName, 'readonly');
-    const store = transaction.objectStore(this.database.fullImageStoreName);
-    const records = await this.getRequestResult(store.getAll());
-    return records.reduce((total, record) => total + Number(record.size || 0), 0);
+  async getAvailableStorage() {
+    try {
+      const estimate = await navigator.storage?.estimate?.();
+      if (Number.isFinite(estimate?.quota) && Number.isFinite(estimate?.usage)) {
+        return Math.max(0, estimate.quota - estimate.usage);
+      }
+    } catch {
+      // Storage estimates are optional. IndexedDB still enforces its quota.
+    }
+    return Infinity;
   }
 
-  async put(attachment, blob, shouldCache) {
-    const attachmentUrl = attachment?.url;
-    const mimeType = attachment?.type || blob?.type || '';
-    if (!attachmentUrl) throw new Error('Cannot cache an image without an attachment URL');
-    if (!mimeType.startsWith('image/')) throw new Error('Full-image cache accepts only image attachments');
-    if (!(blob instanceof Blob)) throw new Error('Full-image cache requires a Blob');
-    if (blob.size > this.maxCacheSize) return false;
+  async put({ attachment, blob, keyFingerprint, shouldCache, owner }) {
+    const id = ThumbnailCache.getAttachmentId(attachment?.url);
+    const mimeType = normalizeMimeType(attachment.type || blob?.type);
+    if (!FullMediaCache.supportsMimeType(mimeType)) throw new Error('Full-media cache accepts only images and videos');
+    if (!(blob instanceof Blob)) throw new Error('Full-media cache requires a Blob');
+    if (blob.size > this.maxCacheSize || !shouldCache()) return false;
 
-    const id = ThumbnailCache.getAttachmentId(attachmentUrl);
-    const db = await this.database.init();
-    if (shouldCache && !shouldCache()) return false;
+    const record = { id, mimeType, size: blob.size, blob, ...(keyFingerprint ? { keyFingerprint } : {}) };
+    const available = await this.getAvailableStorage();
+    try {
+      return await this.write(record, available, shouldCache, owner);
+    } catch (error) {
+      if (error?.name !== 'QuotaExceededError' || !shouldCache()) throw error;
+      // A failed write rolls back its evictions. Commit space reclamation before retrying.
+      await this.evictForQuota(id, blob.size, shouldCache);
+      return this.write(record, Infinity, shouldCache, owner);
+    }
+  }
 
-    const transaction = db.transaction(this.database.fullImageStoreName, 'readwrite');
-    const store = transaction.objectStore(this.database.fullImageStoreName);
-    const cachedAtIndex = store.index('cachedAt');
-    const evictionCandidates = [];
-    let currentSize = 0;
-    let existingSize = 0;
+  write(record, available, shouldCache, owner) {
+    return this.database.ownership.run([this.storeName], owner, ({ transaction, owners, setResult }) => {
+      if (!shouldCache()) return;
+      const store = transaction.objectStore(this.storeName);
+      const lookup = store.get(record.id);
+      lookup.onsuccess = () => {
+        if (!shouldCache()) return;
+        const existing = lookup.result;
+        if (FullMediaCache.matchesRecord(existing, record.mimeType, record.keyFingerprint)) {
+          // Another request filled the cache while this one was downloading.
+          if (Array.isArray(existing.ownerKeys) && owners.some(key => !existing.ownerKeys.includes(key))) {
+            store.put(MediaCacheOwnership.mergeRecord(existing, existing, owners));
+          }
+          setResult(true);
+          return;
+        }
 
-    const cursorRequest = cachedAtIndex.openCursor(null, 'next');
-    cursorRequest.onsuccess = (event) => {
-      const cursor = event.target.result;
-      if (cursor) {
-        const recordSize = Number(cursor.value?.size || 0);
-        currentSize += recordSize;
-        if (cursor.primaryKey === id) {
-          existingSize = recordSize;
-        } else {
-          evictionCandidates.push({ id: cursor.primaryKey, size: recordSize });
+        // Preserve a usable image or authenticated video when another attachment reuses its ID.
+        if (FullMediaCache.matchesRecord(existing, 'image/')) return;
+        if (existing?.keyFingerprint && existing.blob instanceof Blob) return;
+
+        const evictionCandidates = [];
+        let evictableBytes = 0;
+        const request = store.index('cachedAt').openCursor();
+        request.onsuccess = () => {
+          if (!shouldCache()) return;
+          const cursor = request.result;
+          if (cursor) {
+            if (cursor.primaryKey !== record.id) {
+              const size = Number(cursor.value.size || 0);
+              evictableBytes += size;
+              evictionCandidates.push({ id: cursor.primaryKey, size });
+            }
+            cursor.continue();
+            return;
+          }
+
+          const extraBytes = record.size - Number(existing?.size || 0);
+          let bytesToFree = Math.max(0, evictableBytes + record.size - this.maxCacheSize, extraBytes - available);
+          if (bytesToFree > evictableBytes) return;
+          for (const candidate of evictionCandidates) {
+            if (bytesToFree <= 0) break;
+            store.delete(candidate.id);
+            bytesToFree -= candidate.size;
+          }
+          store.put(MediaCacheOwnership.mergeRecord(null, { ...record, cachedAt: Date.now() }, owners));
+          setResult(true);
+        };
+      };
+    });
+  }
+
+  evictForQuota(incomingId, bytesToFree, shouldCache) {
+    return this.database.ownership.run([this.storeName], null, ({ transaction }) => {
+      if (!shouldCache()) return;
+      const request = transaction.objectStore(this.storeName).index('cachedAt').openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || bytesToFree <= 0 || !shouldCache()) return;
+        if (cursor.primaryKey !== incomingId) {
+          bytesToFree -= Number(cursor.value?.size || 0);
+          cursor.delete();
         }
         cursor.continue();
-        return;
-      }
-
-      let bytesToFree = Math.max(0, currentSize - existingSize + blob.size - this.maxCacheSize);
-      for (const record of evictionCandidates) {
-        if (bytesToFree <= 0) break;
-        store.delete(record.id);
-        bytesToFree -= record.size;
-      }
-
-      store.put({
-        id,
-        mimeType,
-        size: blob.size,
-        blob,
-        cachedAt: Date.now(),
-      });
-    };
-
-    await this.waitForTransaction(transaction);
-    return true;
+      };
+    });
   }
 
-  async delete(attachmentUrl) {
+  async delete(attachmentUrl, mimeType, keyFingerprint) {
     const id = ThumbnailCache.getAttachmentId(attachmentUrl);
-    const db = await this.database.init();
-    const transaction = db.transaction(this.database.fullImageStoreName, 'readwrite');
-    transaction.objectStore(this.database.fullImageStoreName).delete(id);
-    await this.waitForTransaction(transaction);
+    const type = normalizeMimeType(mimeType);
+    return this.database.ownership.run([this.storeName], null, ({ transaction }) => {
+      const store = transaction.objectStore(this.storeName);
+      const lookup = store.get(id);
+      lookup.onsuccess = () => {
+        if (FullMediaCache.matchesRecord(lookup.result, type, keyFingerprint)) store.delete(id);
+      };
+    });
   }
 
-  async getOrCache({ attachment, downloadAndDecrypt, shouldCache }) {
+  async getOrCache({ attachment, keyFingerprint, downloadAndDecrypt, shouldCache }) {
+    const owner = MediaCacheOwnership.getOwnerKey();
+    const canCache = () => !this.database.ownership.deleting && (!shouldCache || shouldCache());
+    const mimeType = normalizeMimeType(attachment.type);
+    if (!canCache() || (mimeType.startsWith('video/') && !keyFingerprint)) return downloadAndDecrypt();
     try {
-      const cachedBlob = await this.get(attachment.url);
-      if (cachedBlob) return cachedBlob;
+      const cachedBlob = await this.get(attachment.url, owner, record =>
+        canCache() && FullMediaCache.matchesRecord(record, mimeType, keyFingerprint));
+      if (cachedBlob && canCache()) return cachedBlob;
     } catch (error) {
-      console.warn('Failed to read full image from cache:', error);
+      console.warn('Failed to read full media from cache:', error);
     }
 
     const blob = await downloadAndDecrypt();
 
     try {
-      await this.put(attachment, blob, shouldCache);
+      await this.put({ attachment, blob, keyFingerprint, shouldCache: canCache, owner });
     } catch (error) {
-      console.warn('Failed to cache full image:', error);
+      console.warn('Failed to cache full media:', error);
     }
 
     return blob;
   }
 }
 
-const fullImageCache = new FullImageCache(thumbnailCache);
+const fullMediaCache = new FullMediaCache(thumbnailCache);
