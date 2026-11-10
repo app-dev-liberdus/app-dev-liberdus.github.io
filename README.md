@@ -23,3 +23,14 @@ Each run increments the client version letter and refreshes `version.html`.
 The script preserves `CNAME`, this README, itself, and existing files absent
 from the source. It does not modify the source checkout, commit, push, or publish.
 Review the resulting changes before committing and publishing.
+
+To copy a local branch instead of the source checkout's current `HEAD`, and to
+install that branch's `network.js`, run:
+
+```bash
+./update-dev-client-branch.sh codex/1883-near-send-qr
+```
+
+The branch must already exist locally in the sibling `web-client-v2` checkout.
+This command leaves `network.js_dev` unchanged. A later `./update-dev-client.sh`
+run still copies `network.js_dev` over `network.js`.
