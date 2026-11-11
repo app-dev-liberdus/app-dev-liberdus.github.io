@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'n'; // Also increment this when you increment version.html
+const version = 'o'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -235,6 +235,8 @@ import {
   formatDisplayAmount,
   multichain,
   INTENTS_CHAT_MESSAGE_TYPE,
+  IntentsPaymentTollIncreasedError,
+  IntentsPaymentTollRejectedError,
   buildTransferMessage,
   paymentStatusLabel,
   parseTransferMessage,
@@ -14629,6 +14631,10 @@ function isRecipientTollStateFailure(reason) {
   return /required toll|blocked by the receiver|chat is blocked/i.test(reason);
 }
 
+function isRecipientTollTooLowFailure(reason) {
+  return typeof reason === 'string' && /less than required toll/i.test(reason);
+}
+
 /**
  * Extracts the actionable one-line recipient toll/block reason from a pre-crack message.
  * @param {string} reason
@@ -14643,7 +14649,7 @@ function getRecipientTollPrecrackFailureReason(reason, contact) {
     return 'You are blocked by this user';
   }
 
-  if (/less than required toll/i.test(reason)) {
+  if (isRecipientTollTooLowFailure(reason)) {
     const username = getContactDisplayName(contact);
     return `You can only send reactions to people who have added you as a connection. Ask ${username} to add you as a connection`;
   }
@@ -14673,9 +14679,10 @@ async function refreshNetworkParamsOnTxFeeMismatch(reason) {
  * Inject a transaction
  * @param {Object} tx - The transaction object
  * @param {string} txid - The transaction ID
+ * @param {{deferTollTooLowToast?: boolean}} options - Let the caller report an insufficient toll
  * @returns {Promise<Object>} The response from the injectTx call
  */
-async function injectTx(tx, txid) {
+async function injectTx(tx, txid, { deferTollTooLowToast = false } = {}) {
   if (!isOnline) {
     return null;
   }
@@ -14794,6 +14801,7 @@ async function injectTx(tx, txid) {
         timeDifference()
         toastMessage += ' (Please try again)';
       }
+      if (deferTollTooLowToast && isRecipientTollTooLowFailure(failureReason)) return data;
       if (
         isRecipientTollStateFailure(failureReason)
         && myData.pending.some((pendingTx) => pendingTx.txid === txid && pendingTx.reactionPending)
@@ -23731,7 +23739,7 @@ class ChatModal {
   }
 
   /**
-   * Why a payment receipt could not reach this contact, or null when it can.
+   * The checked toll in LIB wei, or why a payment receipt could not reach this contact.
    *
    * Asked before any money moves. The transfer settles on NEAR and the
    * receipt on Liberdus, so anything that would stop the receipt -- the
@@ -23740,10 +23748,10 @@ class ChatModal {
    * has to be found here, not after the money has gone. Throws when it
    * cannot be checked; the caller refuses then too.
    */
-  async checkPaymentRecipient(recipientAddress, isCurrentLookup = () => true) {
+  async checkPaymentRecipient(recipientAddress, isCurrentLookup = () => true, { checkBalance = true } = {}) {
     const address = normalizeAddress(recipientAddress);
     const contact = myData?.contacts[address];
-    if (!contact) return 'Add this person to your contacts first.';
+    if (!contact) return { problem: 'Add this person to your contacts first.' };
     const name = getContactDisplayName(contact);
     const assertCurrentContact = () => {
       if (myData?.contacts[address] !== contact) {
@@ -23758,7 +23766,7 @@ class ChatModal {
     if (accountRes?.error || !recipient) throw new Error('Recipient account lookup failed');
     const myIsPrivate = isPrivateAccount();
     if ((recipient.private === true) !== myIsPrivate) {
-      return `${myIsPrivate ? 'Private' : 'Public'} accounts can only send to other ${myIsPrivate ? 'private' : 'public'} accounts, so a payment cannot reach ${name} here.`;
+      return { problem: `${myIsPrivate ? 'Private' : 'Public'} accounts can only send to other ${myIsPrivate ? 'private' : 'public'} accounts, so a payment cannot reach ${name} here.` };
     }
 
     const recipientToll = recipient.data?.toll;
@@ -23779,7 +23787,7 @@ class ChatModal {
     const tollState = {
       toll: recipientToll, tollUnit, tollRequiredToSend: noChat ? 1 : required[recipientIndex],
     };
-    if (!isCurrentLookup()) return 'The recipient changed. Go back and review the payment again.';
+    if (!isCurrentLookup()) return { problem: 'The recipient changed. Go back and review the payment again.' };
     Object.assign(contact, tollState);
     if (!noChat) {
       const senderRequired = required[1 - recipientIndex];
@@ -23791,7 +23799,7 @@ class ChatModal {
     }
     this.saveRecipientTollState(address, contact);
     if (tollState.tollRequiredToSend === 2) {
-      return `${name} is not accepting messages from you, so a payment cannot reach them here.`;
+      return { problem: `${name} is not accepting messages from you, so a payment cannot reach them here.` };
     }
     const recipientKeys = contact.public && contact.pqPublic ? contact : {
       public: accountRes.account.publicKey || contact.public,
@@ -23800,20 +23808,23 @@ class ChatModal {
     this.validatePaymentRecipientKeys(address, recipientKeys, myAccount.keys);
     if (recipientKeys !== contact) Object.assign(contact, recipientKeys);
 
-    // Fresh where it can be; the saved balance otherwise, as any send uses.
-    await walletScreen.updateWalletBalances().catch((error) => console.warn('LIB balance refresh failed:', error));
-    assertCurrentContact();
-    const toll = this.paymentMessageToll(tollState);
-    const canPayReceipt = await validateBalance(toll);
-    assertCurrentContact();
-    if (!canPayReceipt) {
-      // validateBalance also refuses when it cannot learn the fee.
-      const fee = getTransactionFeeWei({ allowNull: true });
-      if (fee === null) throw new Error('Message fee unavailable');
-      const needed = formatDisplayAmount(big2str(toll + fee, 18), 6);
-      return `The chat message to ${name} costs ${needed} LIB with its fee, and you do not have enough LIB. Add LIB first.`;
+    if (checkBalance) {
+      // Fresh where it can be; the saved balance otherwise, as any send uses.
+      await walletScreen.updateWalletBalances().catch((error) => console.warn('LIB balance refresh failed:', error));
     }
-    return null;
+    await getNetworkParams(false, isCurrentLookup);
+    assertCurrentContact();
+    const fee = getTransactionFeeWei({ allowNull: true });
+    if (fee === null) throw new Error('Message fee unavailable');
+    const tollWei = this.paymentMessageToll(tollState);
+    if (checkBalance && getLibBalanceWei() < tollWei + fee) {
+      const needed = formatDisplayAmount(big2str(tollWei + fee, 18), 6);
+      return {
+        tollWei,
+        problem: `The chat message to ${name} costs ${needed} LIB with its fee, and you do not have enough LIB. Add LIB first.`,
+      };
+    }
+    return { tollWei };
   }
 
   /** Local eligibility for wallet Send. The receipt check can load missing keys. */
@@ -23821,17 +23832,22 @@ class ChatModal {
     return Boolean(contact.address && !isFaucetAddress(contact.address));
   }
 
-  /** Check receipt eligibility and save a new contact just before publication. */
+  /**
+   * Check receipt eligibility and save a new contact just before publication.
+   * @returns {Promise<{tollWei: bigint, beforePublish: (approvedTollWei: bigint) => void} | {problem: string, tollWei?: bigint}>}
+   */
   async checkIntentsPaymentReceipt(address, username, isCurrentLookup) {
     const contact = myData?.contacts[address];
     if (username && contact && !this.canSendIntentsPaymentTo(contact)) {
       return { problem: 'This contact cannot receive a NEAR Intents payment.' };
     }
 
+    let tollWei;
     let connection;
     if (contact || !username) {
-      const problem = await this.checkPaymentRecipient(address, isCurrentLookup);
-      if (problem) return { problem };
+      const checked = await this.checkPaymentRecipient(address, isCurrentLookup);
+      if (checked.problem) return checked;
+      tollWei = checked.tollWei;
     } else {
       if (isFaucetAddress(address)) {
         return { problem: 'This account cannot receive a NEAR Intents payment.' };
@@ -23841,12 +23857,17 @@ class ChatModal {
           { address, username }, myAccount, { forIntents: true, isCurrentLookup },
         );
       } catch (error) {
-        return { problem: error.message || 'Could not check that this payment can reach them. Try again.' };
+        return {
+          tollWei: error.recipientToll,
+          problem: error.message || 'Could not check that this payment can reach them. Try again.',
+        };
       }
+      tollWei = BigInt(connection.toll);
     }
 
     return {
-      beforePublish: () => {
+      tollWei,
+      beforePublish: (approvedTollWei = tollWei) => {
         if (myData?.contacts[address] !== contact) {
           throw new Error('The recipient changed. Go back and review the payment again.');
         }
@@ -23856,6 +23877,8 @@ class ChatModal {
         if (Number(contact?.tollRequiredToSend) === 2) {
           throw new Error('This recipient has blocked messages.');
         }
+        const latestTollWei = this.paymentMessageToll(contact ?? connection.contactUpdates);
+        if (latestTollWei > approvedTollWei) throw new IntentsPaymentTollIncreasedError(latestTollWei);
         if (contact) this.validatePaymentRecipientKeys(address, contact, myAccount.keys);
         if (!connection) return;
         const friendStatus = connection.contactUpdates.tollRequiredToReceive === 2 ? 0 : 2;
@@ -24068,7 +24091,7 @@ class ChatModal {
    * Retry sends the message again. Called again for the same intent this
    * reuses that card, so it never adds a second, and never moves money.
    */
-  async sendIntentsPaymentMessage(recipientAddress, messageObj) {
+  async sendIntentsPaymentMessage(recipientAddress, messageObj, approvedTollWei, { retry = false } = {}) {
     const currentAddress = normalizeAddress(recipientAddress);
     const keys = myAccount.keys;
     assert(keys, 'Keys not found for sender address');
@@ -24082,19 +24105,25 @@ class ChatModal {
     }
     intentsReceiptsInFlight.add(payment.intentHash);
     try {
-      await this.submitIntentsPaymentMessage(currentAddress, contact, payment, keys);
+      await this.submitIntentsPaymentMessage(currentAddress, contact, payment, keys, approvedTollWei, retry);
     } finally {
       intentsReceiptsInFlight.delete(payment.intentHash);
     }
   }
 
   /** The body of sendIntentsPaymentMessage, run once per intent at a time. */
-  async submitIntentsPaymentMessage(currentAddress, contact, payment, keys) {
+  async submitIntentsPaymentMessage(currentAddress, contact, payment, keys, approvedTollWei, retry) {
     const isCurrentRecipient = () => myData?.contacts[currentAddress] === contact;
-    let card = contact.messages.find((message) => message.my && !message.deleted
+    const findCard = () => contact.messages.find((message) => message.my && !message.deleted
       && message.type === INTENTS_CHAT_MESSAGE_TYPE && message.payment?.intentHash === payment.intentHash);
+    let card = findCard();
     // Already sent, or on its way: nothing to retry.
     if (card && card.status !== 'failed') return;
+    if (retry && !card) return;
+    if (!retry) {
+      assert(typeof approvedTollWei === 'bigint' && approvedTollWei >= 0n, 'Invalid approved payment message toll');
+    }
+    const isCurrentReceipt = () => isCurrentRecipient() && findCard() === card && (!card || card.status === 'failed');
 
     const placeCard = (txid, timestamp, status) => {
       if (!isCurrentRecipient()) return;
@@ -24123,22 +24152,35 @@ class ChatModal {
 
     let built;
     try {
-      const tollInLib = this.paymentMessageToll(contact);
-      let sufficientBalance = await validateBalance(tollInLib);
-      if (!sufficientBalance && isCurrentRecipient()) {
-        // A first-time recipient was checked against live LIB, which can be
-        // higher than the cached wallet balance used by validateBalance.
-        const fee = getTransactionFeeWei({ allowNull: true });
-        if (fee !== null) {
-          const balance = await queryNetwork(`/account/${longAddress(keys.address)}/balance`);
-          sufficientBalance = typeof balance?.balance === 'bigint' && balance.balance >= tollInLib + fee;
-        }
+      if (retry) {
+        const { problem } = await this.checkPaymentRecipient(currentAddress, isCurrentReceipt, { checkBalance: false });
+        if (problem) throw new Error(problem);
       }
       if (!isCurrentRecipient()) throw new Error('The account or recipient changed during receipt preparation.');
-      if (!sufficientBalance) {
+      if (!isCurrentReceipt()) return;
+      if (Number(contact.tollRequiredToSend) === 2) throw new Error('This recipient has blocked messages.');
+      const knownTollWei = this.paymentMessageToll(contact);
+      if (!retry && knownTollWei > approvedTollWei) throw new IntentsPaymentTollIncreasedError(knownTollWei);
+
+      const chatCryptoContext = await this.prepareEncryptedChatContext(currentAddress, keys);
+      await getNetworkParams();
+      let balance = getLibBalanceWei();
+      let fee = getTransactionFeeWei({ allowNull: true });
+      if (isCurrentReceipt() && fee !== null && balance < this.paymentMessageToll(contact) + fee) {
+        // A first-time recipient was checked against live LIB, which can be
+        // higher than the saved wallet balance.
+        const live = await queryNetwork(`/account/${longAddress(keys.address)}/balance`);
+        balance = live?.balance;
+        fee = getTransactionFeeWei({ allowNull: true });
+      }
+      if (!isCurrentRecipient()) throw new Error('The account or recipient changed during receipt preparation.');
+      if (!isCurrentReceipt()) return;
+      if (Number(contact.tollRequiredToSend) === 2) throw new Error('This recipient has blocked messages.');
+      const tollInLib = this.paymentMessageToll(contact);
+      if (!retry && tollInLib > approvedTollWei) throw new IntentsPaymentTollIncreasedError(tollInLib);
+      if (fee === null || typeof balance !== 'bigint' || balance < tollInLib + fee) {
         throw new Error('Not enough LIB for the message fee.');
       }
-      const chatCryptoContext = await this.prepareEncryptedChatContext(currentAddress, keys);
       built = await this.buildEncryptedStructuredChatTx(
         currentAddress,
         // Rebuilt from the parsed claim, so a retry sends what the card shows.
@@ -24147,26 +24189,39 @@ class ChatModal {
         keys,
         chatCryptoContext
       );
+      if (!isCurrentRecipient()) throw new Error('The account or recipient changed during receipt preparation.');
+      if (!isCurrentReceipt()) return;
+      if (Number(contact.tollRequiredToSend) === 2) throw new Error('This recipient has blocked messages.');
+      const latestTollWei = this.paymentMessageToll(contact);
+      if (!retry && latestTollWei > approvedTollWei) throw new IntentsPaymentTollIncreasedError(latestTollWei);
     } catch (error) {
+      const currentReceipt = isCurrentReceipt();
+      // Chat sync can finish a previous attempt while Retry is checking the toll.
+      if (retry && !currentReceipt && isCurrentRecipient()) return;
       // Nothing was submitted. Keep a failed card -- under a local id when
       // there was never a transaction -- so the receipt is not lost with
       // this screen.
-      placeCard(card?.txid || bin2hex(generateRandomBytes(32)), card?.timestamp || getTransactionTimestamp(), 'failed');
+      if (currentReceipt) {
+        placeCard(card?.txid || bin2hex(generateRandomBytes(32)), card?.timestamp || getTransactionTimestamp(), 'failed');
+      }
       throw error;
     }
 
     const { payload, chatMessageObj, txid } = built;
-    if (!isCurrentRecipient()) throw new Error('The account or recipient changed during receipt preparation.');
     placeCard(txid, payload.sent_timestamp, 'sent');
 
-    const response = await injectTx(chatMessageObj, txid);
+    const response = await injectTx(chatMessageObj, txid, { deferTollTooLowToast: !retry });
     if (!response?.result?.success) {
       if (isCurrentRecipient()) {
         updateTransactionStatus(txid, currentAddress, 'failed', 'message');
         this.appendChatModal();
         saveState();
       }
-      throw new Error(response?.result?.reason || 'The chat receipt was rejected.');
+      const reason = response?.result?.reason;
+      if (!retry && !response?.transportFailure && isRecipientTollTooLowFailure(reason)) {
+        throw new IntentsPaymentTollRejectedError(reason);
+      }
+      throw new Error(reason || 'The chat receipt was rejected.');
     }
   }
 
@@ -24175,12 +24230,7 @@ class ChatModal {
     // A second tap while the first is still going: that one will answer.
     if (intentsReceiptsInFlight.has(message.payment?.intentHash)) return;
     try {
-      const problem = await this.checkPaymentRecipient(address);
-      if (problem) {
-        showToast(problem, 0, 'error');
-        return;
-      }
-      await this.sendIntentsPaymentMessage(address, message.payment);
+      await this.sendIntentsPaymentMessage(address, message.payment, undefined, { retry: true });
     } catch (error) {
       console.error('Payment receipt retry failed:', error);
       showToast(`The payment message did not go through: ${error?.message || 'try again'}`, 0, 'error');
@@ -35715,8 +35765,8 @@ multichain.configure({
 
 chatPaymentPanel.configure({
   getAccount: () => myAccount,
-  onSent: (recipientAddress, messageObj) =>
-    chatModal.sendIntentsPaymentMessage(recipientAddress, messageObj),
+  onSent: (recipientAddress, messageObj, approvedTollWei) =>
+    chatModal.sendIntentsPaymentMessage(recipientAddress, messageObj, approvedTollWei),
   showToast,
   lookupUsername: (username) => getUsernameAddress(username, { requireNetworkResult: true }),
   openQRScanner: (fill, onCancel, background) => qrScanModal.open(fill, onCancel, background),

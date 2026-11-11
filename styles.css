@@ -584,6 +584,13 @@ body {
   top: env(safe-area-inset-top, 0);
   /* z-index: 1000; */
   margin-top: env(safe-area-inset-top, 0);
+  /* On desktop the frame has a fixed height, so a shorter window scrolls the
+     page. Keep the header in its place in the frame there, like the footer and
+     the modal headers, instead of sliding over the active screen. */
+  @media (min-width: 769px) {
+    position: relative;
+    top: auto;
+  }
 }
 
 #logo {
@@ -13373,6 +13380,39 @@ button.multichain-token-chip:hover {
 .chat-send-recipient-line .icon-button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.chat-send-costs {
+  display: grid;
+  row-gap: 4px;
+}
+
+.chat-send-cost {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  column-gap: 0.35em;
+  align-items: baseline;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.chat-send-cost > :first-child {
+  text-align: end;
+}
+
+#chatSendReceiptToll {
+  /* Reserve room for a full-precision amount that wraps. */
+  line-height: 1.25;
+  min-block-size: 2.5em;
+  align-content: center;
+}
+
+#chatSendReceiptToll:has(#chatSendReceiptTollAmount:empty) > [aria-hidden="true"] {
+  visibility: hidden;
+}
+
+.chat-send-cost[hidden] {
+  display: none;
 }
 
 textarea.chat-send-note {
