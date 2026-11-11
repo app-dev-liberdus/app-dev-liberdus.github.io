@@ -1,6 +1,4 @@
 import {
-  base642bin,
-  bin2utf8,
   bin2base64,
   normalizeUnsignedFloat,
   BUTTON_COOLDOWN_MS,
@@ -9,6 +7,7 @@ import {
   normalizeHttpsUrl,
   normalizeResourceUrl,
   openModal,
+  PaymentQR,
   utf82bin,
   withButtonCooldown,
   QRImageDecoder,
@@ -2068,7 +2067,7 @@ class EvmSendModal {
     return lookup && this.isCurrentRecipientLookup(lookup) ? this.recipientResolution : null;
   }
 
-  handleRecipientInput({ expectedAddress, debounce = false } = {}) {
+  handleRecipientInput({ expectedAddress, debounce = false, memo = '' } = {}) {
     this.clearRecipientLookup();
     this.submitButton.disabled = true;
 
@@ -2079,7 +2078,7 @@ class EvmSendModal {
       return;
     }
 
-    const lookup = this.recipientLookup = { input, session: this.session, account: this.controller.getAccount() };
+    const lookup = this.recipientLookup = { input, session: this.session, account: this.controller.getAccount(), memo };
     if (recipient.kind === 'username' && debounce) {
       this.recipientLookupTimer = setTimeout(() => {
         this.recipientLookupTimer = null;
@@ -2102,6 +2101,7 @@ class EvmSendModal {
 
       this.setRecipientToll(chat?.toll);
       this.recipientResolution = resolution;
+      if (chat) this.memoInput.value = lookup.memo;
       this.memoGroup.hidden = !chat;
       this.setRecipientStatus(chat ? 'Username verified' : 'Valid address — wallet transfer only', 'success');
     } catch (error) {
@@ -2163,14 +2163,30 @@ class EvmSendModal {
   }
 
   fillFromQR(data) {
-    this.resetForm();
     try {
-      if (!data?.startsWith('liberdus://')) throw new Error('Invalid payment QR code format.');
-      const payment = JSON.parse(bin2utf8(base642bin(data.slice('liberdus://'.length))));
-      // Preserve the existing username/amount QR behavior; QR data does not change the selected asset.
-      this.usernameInput.value = payment.u || '';
+      const request = PaymentQR.decode(data, { allowProfile: true });
+      const asset = this.getSelectedAsset();
+      if (!asset) {
+        this.controller.showToast('This asset is no longer available. Refresh and try again.', 3000, 'warning');
+        return;
+      }
+      const contractAddress = asset.contractAddress?.trim();
+      let assetId = null;
+      if (contractAddress && EVM_ADDRESS_PATTERN.test(contractAddress)) {
+        assetId = contractAddress.toLowerCase();
+      } else if (!asset.contractAddress && String(asset.tokenType).toLowerCase() === 'native') {
+        assetId = 'native';
+      }
+      if (!request.matches(`evm:${asset.chainId}`, assetId)) {
+        this.controller.showToast(request.switchMessage, 0, 'warning');
+        return;
+      }
+
+      this.resetForm();
+      const { payment } = request;
+      this.usernameInput.value = payment.u;
       this.amountInput.value = payment.a || '';
-      this.usernameInput.dispatchEvent(new Event('input'));
+      return this.handleRecipientInput({ memo: typeof payment.m === 'string' ? payment.m : '' });
     } catch (error) {
       this.controller.showToast('Invalid payment QR code format.', 3000, 'error');
     }
@@ -2187,6 +2203,7 @@ class EvmReceiveModal {
     this.modal = document.getElementById('evmReceiveModal');
     this.assetLabel = document.getElementById('evmReceiveAssetLabel');
     this.amountInput = document.getElementById('evmReceiveAmount');
+    this.memoInput = document.getElementById('evmReceiveMemo');
     this.balanceSymbol = document.getElementById('evmReceiveSymbol');
     this.toggleButton = document.getElementById('toggleEvmReceiveBalance');
     this.displayAddress = document.getElementById('evmReceiveAddress');
@@ -2201,6 +2218,7 @@ class EvmReceiveModal {
       this.amountInput.value = normalizeUnsignedFloat(this.amountInput.value);
       this.scheduleQRCode();
     });
+    this.memoInput.addEventListener('input', () => this.scheduleQRCode());
   }
 
   open({ networkId, assetKey }) {
@@ -2251,17 +2269,21 @@ class EvmReceiveModal {
 
   createQRPaymentData() {
     const { account, network, asset, address } = this.session;
+    const isNative = String(asset.tokenType).toLowerCase() === 'native' && !asset.contractAddress;
     const data = {
       u: account.username,
       n: network.id,
+      nn: network.name,
       c: network.chainId,
-      i: asset.contractAddress || asset.key,
+      i: isNative ? 'native' : normalizeEvmAddress(asset.contractAddress, 'token contract'),
       s: asset.tokenSymbol,
       d: this.balanceSymbol.textContent.toUpperCase(),
       r: address,
     };
     const amount = this.amountInput.value.trim();
     if (amount) data.a = amount;
+    const memo = this.memoInput.value.trim();
+    if (memo) data.m = memo;
     return data;
   }
 
@@ -2271,13 +2293,15 @@ class EvmReceiveModal {
     this.preview.style.display = 'none';
     this.preview.textContent = '';
     try {
-      const text = `liberdus://${bin2base64(utf82bin(JSON.stringify(this.createQRPaymentData())))}`;
-      const bytes = qr.encodeQR(text, 'gif', { scale: 4 });
+      const text = PaymentQR.encode(this.createQRPaymentData());
+      const scale = 2;
+      const bytes = qr.encodeQR(text, 'gif', { scale, border: 4 });
       const img = document.createElement('img');
-      img.src = `data:image/gif;base64,${bin2base64(new Uint8Array(bytes))}`;
       img.width = 200;
       img.height = 200;
       img.alt = 'EVM payment request QR code';
+      img.addEventListener('load', () => this.sizeQRCode(img, scale));
+      img.src = `data:image/gif;base64,${bin2base64(new Uint8Array(bytes))}`;
       this.qrcodeContainer.appendChild(img);
       return text;
     } catch (error) {
@@ -2285,6 +2309,14 @@ class EvmReceiveModal {
       this.preview.textContent = 'Unable to generate the payment QR code. You can still copy your address.';
       this.preview.style.display = 'block';
     }
+  }
+
+  sizeQRCode(img, scale) {
+    // Keep QR modules on whole pixels so dense requests remain readable.
+    const modules = img.naturalWidth / scale;
+    const size = modules * Math.max(1, Math.round(200 / modules));
+    img.width = size;
+    img.height = size;
   }
 
   handleToggleBalance() {
@@ -2326,6 +2358,7 @@ class EvmReceiveModal {
     this.modal?.classList.remove('active');
     this.copyButton?.classList.remove('success');
     if (this.displayAddress) this.displayAddress.textContent = '';
+    if (this.memoInput) this.memoInput.value = '';
     this.qrcodeContainer?.replaceChildren();
   }
 }
@@ -2700,10 +2733,7 @@ class EvmAssetsController {
       const session = form.session;
       form.usernameInput.value = recipient;
       form.amountInput.value = evmPaymentAmount(payment);
-      const lookup = form.handleRecipientInput({ expectedAddress: payment.to });
-      // Restore the note after recipient input clears the memo.
-      form.memoInput.value = payment.note || '';
-      await lookup;
+      await form.handleRecipientInput({ expectedAddress: payment.to, memo: payment.note });
       if (!form.isCurrentSession(session) || form.usernameInput.value !== recipient) return;
       form.refreshSendButtonDisabledState();
       this.showToast('Review the recipient and amount. Nothing has been sent.', 5000, 'info');

@@ -4,7 +4,6 @@
 
 import {
   base582bin,
-  base642bin,
   bin2base58,
   bin2base64,
   bin2hex,
@@ -12,6 +11,7 @@ import {
   hex2bin,
   utf82bin,
   BUTTON_COOLDOWN_MS,
+  PaymentQR,
   QRImageDecoder,
   WalletUsdValuation,
   escapeHtml,
@@ -3345,7 +3345,7 @@ const POPULAR = Object.freeze([
   'nep141:eth.omft.near',
   'nep141:sol.omft.near',
   'nep141:xrp.omft.near',
-  'nep245:v2_1.omni.hot.tg:56_11111111111111111111', // BNB on BNB Chain
+  'nep141:bnb.omdep.near', // BNB on BNB Chain
   'nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near', // USDT on Ethereum
   'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near', // USDC on Ethereum
   'nep141:zec.omft.near',
@@ -3681,8 +3681,8 @@ class MultichainModal {
       this.render();
     });
     this.empty = document.getElementById('multichainEmpty');
-    document.getElementById('multichainDepositAnother')
-      .addEventListener('click', () => this.controller.startDeposit());
+    document.getElementById('multichainOtherAssets')
+      .addEventListener('click', () => this.controller.openOtherAssets());
 
     document.getElementById('closeMultichainModal')
       .addEventListener('click', () => this.close());
@@ -4067,7 +4067,14 @@ class MultichainRequestModal {
     const session = this.session;
     if (!this.isCurrentSession(session)) throw new Error('This payment request is no longer active.');
     const { asset, address, username } = session;
-    const data = { t: 'intents', address, u: username, i: asset.assetId, s: asset.tokenSymbol };
+    const data = {
+      t: INTENTS_NETWORK_ID,
+      address,
+      u: username,
+      i: asset.assetId,
+      s: asset.tokenSymbol,
+      an: assetTitle(asset),
+    };
     const amount = this.amountInput.value.trim();
     if (amount) {
       parseTokenAmount(amount, asset.tokenDecimals);
@@ -4087,8 +4094,7 @@ class MultichainRequestModal {
     this.qrcodeContainer.replaceChildren();
     this.status.textContent = '';
     try {
-      const data = this.createQRPaymentData();
-      const text = `liberdus://${bin2base64(utf82bin(JSON.stringify(data)))}`;
+      const text = PaymentQR.encode(this.createQRPaymentData());
       const bytes = globalThis.qr.encodeQR(text, 'gif', { scale: 4, border: 4 });
       const img = document.createElement('img');
       img.addEventListener('load', () => this.sizeQRCode());
@@ -5431,6 +5437,8 @@ class MultichainSwapModal {
 class MultichainController {
   constructor() {
     this.loaded = false;
+    this.depositPickerLoad = null;
+    this.depositPickerRequestId = 0;
     this.getAccount = () => null;
     // The chat payment panel registers its send action when configured.
     this.onSend = () => {};
@@ -5543,26 +5551,39 @@ class MultichainController {
     return intentsAssets.refresh(options);
   }
 
-  /**
-   * Deposit anything the bridge carries, including assets outside the
-   * holdings and starter rows shown on the asset screen.
-   *
-   * The picker's rows are asset-on-chain, so one tap answers both "which
-   * token" and "which network" -- no separate network question.
-   */
-  async startDeposit() {
+  openOtherAssets() {
+    return this.openDepositableAssetPicker({
+      title: 'Other assets',
+      onPick: (key) => this.assetModal.open(key),
+    });
+  }
+
+  startDeposit() {
+    return this.openDepositableAssetPicker({
+      title: 'Deposit',
+      onPick: (key) => this.receiveModal.open(key),
+    });
+  }
+
+  async openDepositableAssetPicker({ title, onPick }) {
+    const requestId = ++this.depositPickerRequestId;
     try {
-      await intentsDeposits.loadBridgeTokens();
+      this.depositPickerLoad ??= intentsDeposits.loadBridgeTokens().finally(() => {
+        this.depositPickerLoad = null;
+      });
+      await this.depositPickerLoad;
     } catch (error) {
+      if (requestId !== this.depositPickerRequestId) return;
       console.warn('Deposit options unavailable:', error);
       this.assetsModal.statusLine.textContent = 'Could not load what you can receive. Try again in a moment.';
       return;
     }
+    if (requestId !== this.depositPickerRequestId) return;
     this.tokenPicker.open({
-      title: 'Deposit',
-      // Not an asset deposits never land on, whatever the bridge lists.
+      title,
+      // Skip assets whose deposits credit a different asset.
       accepts: (asset) => intentsDeposits.isDepositable(asset.assetId) && !DEPOSIT_CREDITS[asset.assetId],
-      onPick: (key) => this.receiveModal.open(key),
+      onPick,
     });
   }
 
@@ -5661,7 +5682,7 @@ export class ChatPaymentPanel {
 
   load() {
     if (this.loaded) return;
-    this.modal = $('chatSendModal');
+    this.modal = $('nearIntentsSendModal');
     this.title = $('chatSendTitle');
     this.form = $('chatSendForm');
     this.empty = $('chatSendEmpty');
@@ -5702,7 +5723,7 @@ export class ChatPaymentPanel {
       },
     });
 
-    $('closeChatSendModal').addEventListener('click', () => this.close());
+    $('closeNearIntentsSendModal').addEventListener('click', () => this.close());
     this.sendButton.addEventListener('click', () => this.primaryAction());
     this.assetPicker.addEventListener('click', () => {
       const session = this.session;
@@ -5803,28 +5824,17 @@ export class ChatPaymentPanel {
     }
   }
 
-  parseQRRequest(text) {
-    const prefix = 'liberdus://';
-    let data;
-    try {
-      if (!text.startsWith(prefix)) throw new Error();
-      data = JSON.parse(bin2utf8(base642bin(text.slice(prefix.length))));
-    } catch {
-      throw new Error('Invalid payment QR code.');
+  parseQRRequest(payment, asset) {
+    const username = payment.u.toLowerCase();
+    const address = typeof payment.address === 'string' && intentsAccountIdForAddress(payment.address);
+    if (!/^[a-z0-9]{3,15}$/.test(username) || !address) {
+      throw new Error('This payment request has an invalid username or address.');
     }
-    if (data?.t !== 'intents') throw new Error('Scan a NEAR Assets Receive QR code.');
-
-    const username = typeof data.u === 'string' ? data.u.toLowerCase() : '';
-    const address = typeof data.address === 'string' && intentsAccountIdForAddress(data.address);
-    if (!/^[a-z0-9]{3,15}$/.test(username) || !address || typeof data.i !== 'string' || !data.i) {
-      throw new Error('This payment request has an invalid username, address, or asset ID.');
-    }
-    const { a: amount = '', m: memo = '' } = data;
+    const { a: amount = '', m: memo = '' } = payment;
     if (typeof amount !== 'string' || typeof memo !== 'string' || memo.length > 140) {
       throw new Error('This payment request has an invalid amount or note.');
     }
-    const asset = intentsAssets.getAssets().find(({ assetId, rawAmount }) => assetId === data.i && rawAmount !== '0');
-    if (!asset) throw new Error('The requested asset is unavailable in your NEAR Assets wallet.');
+    if (!asset || asset.rawAmount === '0') throw new Error('The requested asset is unavailable in your NEAR Assets wallet.');
     if (amount) parseTokenAmount(amount, asset.tokenDecimals);
     return { username, address, assetKey: asset.key, amount, memo };
   }
@@ -5833,7 +5843,14 @@ export class ChatPaymentPanel {
     if (!this.canReadQR(session)) return;
     let request;
     try {
-      request = this.parseQRRequest(text);
+      const qr = PaymentQR.decode(text);
+      const asset = this.selectedAsset();
+      const assetId = asset?.assetId ?? intentsAssets.getCatalogAsset(this.assetKey)?.assetId;
+      if (!qr.matches(INTENTS_NETWORK_ID, assetId)) {
+        this.showToast(qr.switchMessage, 0, 'warning');
+        return;
+      }
+      request = this.parseQRRequest(qr.payment, asset);
     } catch (error) {
       this.showToast(error.message, 0, 'error');
       return;
@@ -5855,12 +5872,10 @@ export class ChatPaymentPanel {
   }
 
   applyQRRequest(lookup) {
-    const { assetKey, amount, memo } = lookup.request;
+    const { amount, memo } = lookup.request;
     this.clearRecipientLookup();
     this.recipientLookup = lookup;
     this.recipientInput.value = lookup.input = lookup.username;
-    this.assetKey = assetKey;
-    this.renderAsset();
     this.amount.reset(amount);
     this.noteInput.value = memo;
     this.noteInput.hidden = !memo;
@@ -5944,8 +5959,8 @@ export class ChatPaymentPanel {
       return;
     }
     if (lookup.request) {
-      const asset = intentsAssets.getAsset(lookup.request.assetKey);
-      if (!asset || asset.rawAmount === '0') {
+      const asset = this.selectedAsset();
+      if (!asset || asset.key !== lookup.request.assetKey || asset.rawAmount === '0') {
         showError('The requested asset is unavailable in your NEAR Assets wallet.');
         return;
       }

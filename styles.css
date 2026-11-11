@@ -6684,14 +6684,25 @@ input[type='file'].form-control {
   align-items: center;
 }
 
-:is(#qrcode, #evmReceiveQRCode) img,
-:is(#qrcode, #evmReceiveQRCode) canvas,
+#qrcode:not(:empty) {
+  width: min(100%, calc(300px + 1.5rem));
+  aspect-ratio: 1;
+}
+
+#qrcode canvas,
 #secretQRCode img,
 #secretQRCode canvas {
   display: block;
   width: 200px;
   height: 200px;
   max-width: 100%;
+}
+
+:is(#qrcode, #evmReceiveQRCode) img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  image-rendering: pixelated;
 }
 
 #availableBalance {
@@ -12251,7 +12262,7 @@ small {
   display: none;
 }
 
-.multichain-deposit-another {
+.multichain-other-assets {
   margin: 16px 16px 0;
 }
 
@@ -12275,7 +12286,7 @@ small {
     margin-top: 16px;
   }
 
-  #multichainModal .multichain-deposit-another {
+  #multichainModal .multichain-other-assets {
     margin-top: 8px;
   }
 
