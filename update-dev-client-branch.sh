@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Copy a chosen local branch from the sibling web-client-v2 checkout into this site's root.
-# Also installs that branch's network.js. update-dev-client.sh keeps this site's network.js_dev instead.
+# Also installs that branch's network.js. network.js_dev in this site is left unchanged.
 # Requires Bash, Git, tar, and rsync. Run from any directory; no build is needed.
 #
 # Usage: ./update-dev-client-branch.sh <local-branch>
@@ -94,5 +94,5 @@ date +'%Y.%m%d.%H%M' > "$REPO_DIR/version.html"
 
 echo "Updated root client to $new_version ($(cat "$REPO_DIR/version.html"))."
 echo "Installed network.js from $BRANCH."
-echo "Left network.js_dev unchanged. ./update-dev-client.sh would copy that file over network.js."
+echo "Left network.js_dev unchanged."
 echo "Review the changes with git diff before committing or publishing."

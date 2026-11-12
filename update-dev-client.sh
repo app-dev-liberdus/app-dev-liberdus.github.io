@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Copy the sibling web-client-v2 HEAD commit into this site's root.
+# Copy the sibling web-client-v2 HEAD commit into this site's root, including its network.js.
 # Requires Bash, Git, tar, and rsync. Run from any directory; no build is needed.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_REPO="$(dirname "$REPO_DIR")/web-client-v2"
@@ -19,13 +19,7 @@ SOURCE_DIR=$(mktemp -d)
 trap 'rm -rf "$SOURCE_DIR"' EXIT
 git -C "$SOURCE_REPO" archive "$SOURCE_COMMIT" | tar -xf - -C "$SOURCE_DIR"
 
-# Prefer this site's network override; seed it from the source on first use.
-NETWORK_CONFIG="$REPO_DIR/network.js_dev"
-if [[ ! -f "$NETWORK_CONFIG" ]]; then
-    NETWORK_CONFIG="$SOURCE_DIR/network.js_dev"
-fi
-
-for file in "$SOURCE_DIR/index.html" "$SOURCE_DIR/app.js" "$SOURCE_DIR/.gitignore" "$NETWORK_CONFIG"; do
+for file in "$SOURCE_DIR/index.html" "$SOURCE_DIR/app.js" "$SOURCE_DIR/.gitignore" "$SOURCE_DIR/network.js"; do
     if [[ ! -f "$file" ]]; then
         echo "Error: required file not found: $file" >&2
         exit 1
@@ -51,6 +45,7 @@ new_version="${current_version:0:${#current_version}-1}$next_char"
 
 echo "Copying $SOURCE_REPO at $SOURCE_COMMIT into $REPO_DIR..."
 # Never copy source Git metadata, workflows, local tooling, or site-owned files.
+# network.js is excluded here and installed from the source commit afterward.
 # No --delete: preserve this site's configuration and other local files.
 rsync -av \
     --exclude='/.*' \
@@ -67,12 +62,10 @@ rsync -av \
     --exclude-from="$SOURCE_DIR/.gitignore" \
     "$SOURCE_DIR/" "$REPO_DIR/"
 
-if [[ "$NETWORK_CONFIG" != "$REPO_DIR/network.js_dev" ]]; then
-    cp "$NETWORK_CONFIG" "$REPO_DIR/network.js_dev"
-fi
-cp "$REPO_DIR/network.js_dev" "$REPO_DIR/network.js"
+cp "$SOURCE_DIR/network.js" "$REPO_DIR/network.js"
 sed -i "s/^const version = '[^']*'/const version = '$new_version'/" "$REPO_DIR/app.js"
 date +'%Y.%m%d.%H%M' > "$REPO_DIR/version.html"
 
 echo "Updated root client to $new_version ($(cat "$REPO_DIR/version.html"))."
+echo "Installed network.js from $SOURCE_COMMIT."
 echo "Review the changes with git diff before committing or publishing."

@@ -6059,48 +6059,68 @@ input[type='file'].form-control::file-selector-button {
   width: var(--icon-size-24);
   height: var(--icon-size-24);
   display: inline-block;
+  background-image: var(--wallet-action-icon, none);
   background-position: center;
   background-repeat: no-repeat;
   background-size: contain;
   opacity: 0.9;
 }
 
-/* Send icon (up chevron) */
-#openSendAssetFormModal .action-icon,
-#assetDetailsSend .action-icon {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='18 15 12 9 6 15'%3E%3C/polyline%3E%3C/svg%3E");
+.action-label {
+  font-weight: 500;
+}
+
+/* Wallet artwork is shared by action buttons and matching Activity rows. */
+[data-wallet-icon='sent'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='18 15 12 9 6 15'%3E%3C/polyline%3E%3C/svg%3E");
 }
 
 /* Receive icon (down chevron) */
-#openReceiveModal .action-icon,
-#assetDetailsReceive .action-icon {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+[data-wallet-icon='receive'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+}
+
+/* NEAR Receive uses a lighter stroke on the asset detail screen. */
+[data-wallet-icon='received'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+}
+
+/* Use thinner strokes on the denser arrow shapes to match the chevrons visually. */
+[data-wallet-icon='deposit'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='17' y1='7' x2='7' y2='17'/%3E%3Cpolyline points='17 17 7 17 7 7'/%3E%3C/svg%3E");
+}
+
+[data-wallet-icon='withdraw'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='7' y1='17' x2='17' y2='7'/%3E%3Cpolyline points='7 7 17 7 17 17'/%3E%3C/svg%3E");
+}
+
+[data-wallet-icon='swap'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='16 3 21 8 16 13'/%3E%3Cpath d='M21 8H8'/%3E%3Cpolyline points='8 21 3 16 8 11'/%3E%3Cpath d='M3 16h13'/%3E%3C/svg%3E");
 }
 
 /* History icon (clock) */
-#openHistoryModal .action-icon,
-#assetDetailsHistory .action-icon {
-  background-image: var(--icon-clock);
+[data-wallet-icon='history'] {
+  --wallet-action-icon: var(--icon-clock);
 }
 
 /* Buy icon (shopping cart) */
-#openBuyButton .action-icon {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='21' r='1'%3E%3C/circle%3E%3Ccircle cx='20' cy='21' r='1'%3E%3C/circle%3E%3Cpath d='M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6'%3E%3C/path%3E%3C/svg%3E");
+[data-wallet-icon='buy'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='21' r='1'%3E%3C/circle%3E%3Ccircle cx='20' cy='21' r='1'%3E%3C/circle%3E%3Cpath d='M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6'%3E%3C/path%3E%3C/svg%3E");
 }
 
 /* Sell icon (dollar sign) */
-#openSellButton .action-icon {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' y1='1' x2='12' y2='23'%3E%3C/line%3E%3Cpath d='M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6'%3E%3C/path%3E%3C/svg%3E");
+[data-wallet-icon='sell'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' y1='1' x2='12' y2='23'%3E%3C/line%3E%3Cpath d='M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6'%3E%3C/path%3E%3C/svg%3E");
 }
 
 /* Faucet/Bridge icon - default to water drop (faucet) */
-#openFaucetBridgeButton .action-icon {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z'%3E%3C/path%3E%3C/svg%3E");
+[data-wallet-icon='faucet'] {
+  --wallet-action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z'%3E%3C/path%3E%3C/svg%3E");
 }
 
 /* Bridge icon when on mainnet (same as menu bridge icon) */
-#openFaucetBridgeButton.bridge-mode .action-icon {
-  background-image: var(--icon-bridge);
+.bridge-mode [data-wallet-icon='faucet'] {
+  --wallet-action-icon: var(--icon-bridge);
 }
 
 /* Profile Sharing Note */
@@ -6110,10 +6130,6 @@ input[type='file'].form-control::file-selector-button {
   font-size: 14px;
   margin-bottom: 16px;
   font-family: var(--font-primary);
-}
-
-.action-label {
-  font-weight: 500;
 }
 
 .section-title {
@@ -6245,32 +6261,61 @@ input[type='file'].form-control::file-selector-button {
   text-align: left;
 }
 
+.asset-detail-header {
+  height: auto;
+  min-height: 56px;
+  padding-block: 8px;
+}
+
+.asset-detail-header .modal-title {
+  margin-inline: 56px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
 .asset-detail-hero {
-  padding: 1rem 0 1.25rem;
+  padding: 48px 16px 0;
+  text-align: center;
 }
 
-.asset-detail-symbol {
-  color: var(--secondary-text-color);
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-  margin-bottom: 0.5rem;
+.asset-detail-logo {
+  display: inline-grid;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  overflow: hidden;
+  vertical-align: middle;
 }
 
-.asset-detail-price {
-  color: var(--text-color);
-  font-size: var(--font-size-xxl);
-  font-weight: var(--font-weight-semibold);
+.asset-detail-logo > span {
+  display: grid;
+  place-items: center;
+  background-color: hsl(var(--asset-logo-hue, 0) 62% 88%);
+  color: var(--dark-color);
+  font-size: 32px;
+  font-weight: var(--font-weight-bold);
+}
+
+.asset-detail-amount {
+  margin-top: 16px;
+  font-size: 32px;
+  font-weight: var(--font-weight-bold);
   line-height: 1.1;
+  color: var(--text-color);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
-.asset-detail-updated {
-  color: var(--secondary-text-color);
+.asset-detail-value {
+  margin-top: 8px;
   font-size: var(--font-size-sm);
-  margin-top: 0.75rem;
+  color: var(--secondary-text-color);
 }
 
-.asset-detail-actions {
+.asset-details-content > .asset-detail-actions {
   flex-wrap: nowrap;
+  margin-top: 32px;
   padding: 0 0 1.25rem;
 }
 
@@ -6287,45 +6332,6 @@ input[type='file'].form-control::file-selector-button {
   color: var(--text-color);
   font-size: var(--font-size-lg);
   margin-bottom: 1rem;
-}
-
-.asset-detail-balance-card {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.asset-detail-balance-card .asset-logo {
-  flex: 0 0 40px;
-  margin-right: 0;
-}
-
-.asset-detail-balance-name,
-.asset-detail-balance-values {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.asset-detail-balance-name {
-  flex: 1;
-  min-width: 0;
-}
-
-.asset-detail-balance-values {
-  align-items: flex-end;
-  text-align: right;
-}
-
-.asset-detail-balance-name span,
-.asset-detail-balance-values span {
-  color: var(--secondary-text-color);
-  font-size: var(--font-size-sm);
-}
-
-.asset-detail-list {
-  display: grid;
-  gap: 1rem;
 }
 
 .asset-detail-list > div {
@@ -6345,9 +6351,6 @@ input[type='file'].form-control::file-selector-button {
   font-weight: var(--font-weight-medium);
   max-width: 62%;
   text-align: right;
-}
-
-.asset-detail-address-row dd {
   overflow-wrap: anywhere;
 }
 
@@ -12324,24 +12327,22 @@ small {
   background: var(--background-color);
 }
 
-/* The glyph on a tinted disc, as a mask so it takes the accent (DESIGN.md
-   §6 -- currentColor does not reach inside the data-URI artwork). */
 .multichain-activity-icon {
   position: relative;
   flex: 0 0 40px;
   width: 40px;
   height: 40px;
-  border-radius: 50%;
-  background: var(--hover-background-purple);
+  border-radius: 8px;
+  background: var(--light-color);
 }
 
 .multichain-activity-icon::after {
   content: '';
   position: absolute;
-  inset: 10px;
-  background-color: var(--primary-color);
-  -webkit-mask: var(--action-icon) center / contain no-repeat;
-  mask: var(--action-icon) center / contain no-repeat;
+  inset: 8px;
+  background-color: var(--text-color);
+  -webkit-mask: var(--wallet-action-icon) center / contain no-repeat;
+  mask: var(--wallet-action-icon) center / contain no-repeat;
 }
 
 .multichain-activity-status {
@@ -12577,58 +12578,14 @@ small {
 }
 
 #multichainAssetModal .wallet-action-button {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
   padding: 16px 8px;
-  border: 1px solid var(--border-color);
   border-radius: 12px;
-  background: var(--background-color);
-}
-
-#multichainAssetModal .wallet-action-button:hover:not(:disabled) {
-  background: var(--hover-background-purple);
-  border-color: var(--primary-color);
 }
 
 #multichainAssetModal .wallet-action-button:disabled {
+  background-color: var(--light-color);
   opacity: 0.4;
   cursor: default;
-}
-
-#multichainAssetModal .action-icon {
-  color: var(--primary-color);
-}
-
-#multichainAssetModal .action-label {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--text-color);
-}
-
-/* --- asset screen --------------------------------------------------------- */
-
-.multichain-asset-hero {
-  padding: 48px 16px 0;
-  text-align: center;
-}
-
-
-
-.multichain-asset-amount {
-  margin-top: 16px;
-  font-size: 32px;
-  font-weight: 700;
-  line-height: 1.1;
-  color: var(--text-color);
-  font-variant-numeric: tabular-nums;
-}
-
-.multichain-asset-value {
-  margin-top: 8px;
-  font-size: var(--font-size-sm);
-  color: var(--secondary-text-color);
 }
 
 /* --- task screens (receive, withdraw, swap) ------------------------------- */
@@ -13467,38 +13424,6 @@ textarea.chat-send-note {
   color: var(--secondary-text-color);
 }
 
-
-/* Action icons, in the app's own language: diagonals rather than chevrons,
-   matching the asset detail screen. Deposit points in, withdraw points out.
-
-   Painted as masks: `currentColor` does not reach inside a data-URI SVG, so as
-   background images these drew black whatever colour the icon was given
-   (DESIGN.md §6). Each rule publishes its artwork; the mask takes the colour. */
-#multichainAssetModal .action-icon {
-  background-color: currentColor;
-  background-image: none;
-  -webkit-mask: var(--action-icon) center / contain no-repeat;
-  mask: var(--action-icon) center / contain no-repeat;
-}
-
-:is(#multichainAssetReceive, #multichainAssetDeposit) .action-icon,
-.multichain-activity-icon[data-icon='in'] {
-  --action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='17' y1='7' x2='7' y2='17'/%3E%3Cpolyline points='17 17 7 17 7 7'/%3E%3C/svg%3E");
-}
-
-:is(#multichainAssetSend, #multichainAssetWithdraw) .action-icon,
-.multichain-activity-icon[data-icon='out'] {
-  --action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='7' y1='17' x2='17' y2='7'/%3E%3Cpolyline points='7 7 17 7 17 17'/%3E%3C/svg%3E");
-}
-
-.multichain-activity-icon[data-icon='send'] {
-  --action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 2 11 13'/%3E%3Cpath d='M22 2 15 22l-4-9-9-4z'/%3E%3C/svg%3E");
-}
-
-#multichainAssetSwap .action-icon,
-.multichain-activity-icon[data-icon='swap'] {
-  --action-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='16 3 21 8 16 13'/%3E%3Cpath d='M21 8H8'/%3E%3Cpolyline points='8 21 3 16 8 11'/%3E%3Cpath d='M3 16h13'/%3E%3C/svg%3E");
-}
 
 /* An option's icon in the popup that stands in for a native select. Same
    shape as .asset-mark: the label is drawn and the image laid over it, so an

@@ -15,10 +15,9 @@ untracked files, staged and unstaged changes, development files, and patterns
 in the committed `.gitignore`. Commit source changes before updating this site.
 
 No client files need to be prepared beforehand. The first run replaces the
-placeholder `index.html`, copies the client assets, and creates `network.js_dev`
-from the source commit. Later runs preserve this site's `network.js_dev` and
-copy it to `network.js`; edit the local `network.js_dev` to change network settings.
-Each run increments the client version letter and refreshes `version.html`.
+placeholder `index.html` and copies the client assets, including the source
+commit's `network.js`. Each run increments the client version letter and
+refreshes `version.html`. The local `network.js_dev` file is left unchanged.
 
 The script preserves `CNAME`, this README, itself, and existing files absent
 from the source. It does not modify the source checkout, commit, push, or publish.
@@ -32,5 +31,5 @@ install that branch's `network.js`, run:
 ```
 
 The branch must already exist locally in the sibling `web-client-v2` checkout.
-This command leaves `network.js_dev` unchanged. A later `./update-dev-client.sh`
-run still copies `network.js_dev` over `network.js`.
+This command also installs that branch's `network.js` and leaves `network.js_dev`
+unchanged.
