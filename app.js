@@ -1,6 +1,6 @@
 // Check if there is a newer version and load that using a new random url to avoid cache hits
 //   Versions should be YYYY.MMDD.HHmm like 2025.0125.1005
-const version = 'u'; // Also increment this when you increment version.html
+const version = 'v'; // Also increment this when you increment version.html
 const BOOT_SPLASH_HANDOFF_MS = 1000;
 const BOOT_SPLASH_FRAME_TIMEOUT_MS = 100;
 const BOOT_SPLASH_IMAGE_TIMEOUT_MS = 2000;
@@ -27715,19 +27715,22 @@ class ChatModal {
     const account = myAccount;
     const isCurrent = () => this.paymentWalletRequestId === requestId
       && myAccount === account && findTopModal() === this.modal;
+    // Send from the asset details goes back to the person in this chat.
+    const contact = myData?.contacts?.[this.address];
+    const recipient = contact ? { username: contact.username || '', address: contact.address } : null;
 
     if (target.type === EVM_CHAT_MESSAGE_TYPE) {
       const { walletNetwork, asset } = await evmAssets.resolvePaymentAsset(target);
       if (!isCurrent()) return;
       if (asset) {
-        evmAssets.assetDetailsModal.open(walletNetwork.id, asset.key);
+        evmAssets.assetDetailsModal.open(walletNetwork.id, asset.key, { recipient });
         return;
       }
     } else {
       const asset = await multichain.resolvePaymentAsset(target);
       if (!isCurrent()) return;
       if (asset) {
-        multichain.assetModal.open(asset.key);
+        multichain.assetModal.open(asset.key, { recipient });
         return;
       }
     }
